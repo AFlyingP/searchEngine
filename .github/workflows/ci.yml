@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    name: Code Formatting Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format
+      - name: Check Formatting
+        run: |
+          find src tests cli server bench fuzz -name '*.cpp' -o -name '*.hpp' | xargs clang-format --dry-run --Werror
+
+  build-test:
+    name: Build & Test (${{ matrix.compiler }}, ${{ matrix.preset }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        preset: [debug, release, sanitize]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+          if [ "${{ matrix.compiler }}" = "gcc" ]; then
+            sudo apt-get install -y g++-12
+            echo "CC=gcc-12" >> $GITHUB_ENV
+            echo "CXX=g++-12" >> $GITHUB_ENV
+          else
+            sudo apt-get install -y clang-15
+            echo "CC=clang-15" >> $GITHUB_ENV
+            echo "CXX=clang++-15" >> $GITHUB_ENV
+          fi
+      - name: Configure CMake
+        run: cmake --preset ${{ matrix.preset }}
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Run Tests
+        run: ctest --preset ${{ matrix.preset }} --output-on-failure
+
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang-15 llvm-15 lcov
+      - name: Configure & Build with Coverage
+        env:
+          CC: clang-15
+          CXX: clang++-15
+        run: |
+          cmake -B build/coverage -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DENABLE_COVERAGE=ON
+          cmake --build build/coverage
+      - name: Run Test Suite
+        run: ctest --test-dir build/coverage --output-on-failure
+      - name: Generate Coverage Report
+        run: |
+          llvm-profdata-15 merge -sparse default.profraw -o coverage.profdata || true
+          llvm-cov-15 show ./build/coverage/tests/unit/test_needlefish_unit \
+            -instr-profile=coverage.profdata \
+            -ignore-filename-regex='(tests/|_deps/)' \
+            -format=text > coverage.txt || true
+          cat coverage.txt || true

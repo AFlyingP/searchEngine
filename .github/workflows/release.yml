@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-release-binaries:
+    name: Build Release Binary (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: needlefish-linux-x86_64
+            cmake_flags: -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++"
+          - os: macos-latest
+            artifact_name: needlefish-macos-universal
+            cmake_flags: ""
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Install Ninja on macOS
+        if: runner.os == 'macOS'
+        run: brew install ninja
+      - name: Configure CMake
+        run: cmake -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_LTO=ON ${{ matrix.cmake_flags }}
+      - name: Build
+        run: cmake --build build/release --target needlefish_cli
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: build/release/cli/needlefish*
+
+  publish-ghcr:
+    name: Build and Push Docker image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
