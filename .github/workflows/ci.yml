@@ -37,12 +37,23 @@ jobs:
             echo "CC=gcc-14" >> $GITHUB_ENV
             echo "CXX=g++-14" >> $GITHUB_ENV
           else
-            sudo apt-get install -y clang-18
+            sudo apt-get install -y clang-18 llvm-18 lld-18
             echo "CC=clang-18" >> $GITHUB_ENV
             echo "CXX=clang++-18" >> $GITHUB_ENV
           fi
       - name: Configure CMake
-        run: cmake --preset ${{ matrix.preset }} -DCMAKE_C_COMPILER=${CC} -DCMAKE_CXX_COMPILER=${CXX}
+        run: |
+          if [ "${{ matrix.compiler }}" = "clang" ]; then
+            cmake --preset ${{ matrix.preset }} \
+              -DCMAKE_C_COMPILER=clang-18 \
+              -DCMAKE_CXX_COMPILER=clang++-18 \
+              -DCMAKE_AR=llvm-ar-18 \
+              -DCMAKE_RANLIB=llvm-ranlib-18
+          else
+            cmake --preset ${{ matrix.preset }} \
+              -DCMAKE_C_COMPILER=gcc-14 \
+              -DCMAKE_CXX_COMPILER=g++-14
+          fi
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Run Tests
