@@ -31,28 +31,17 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build
-          if [ "${{ matrix.compiler }}" = "gcc" ]; then
-            sudo apt-get install -y g++-14
-            echo "CC=gcc-14" >> $GITHUB_ENV
-            echo "CXX=g++-14" >> $GITHUB_ENV
-          else
-            sudo apt-get install -y clang-18 llvm-18 lld-18
-            echo "CC=clang-18" >> $GITHUB_ENV
-            echo "CXX=clang++-18" >> $GITHUB_ENV
-          fi
+          sudo apt-get install -y ninja-build clang llvm
       - name: Configure CMake
         run: |
           if [ "${{ matrix.compiler }}" = "clang" ]; then
             cmake --preset ${{ matrix.preset }} \
-              -DCMAKE_C_COMPILER=clang-18 \
-              -DCMAKE_CXX_COMPILER=clang++-18 \
-              -DCMAKE_AR=llvm-ar-18 \
-              -DCMAKE_RANLIB=llvm-ranlib-18
+              -DCMAKE_C_COMPILER=clang \
+              -DCMAKE_CXX_COMPILER=clang++
           else
             cmake --preset ${{ matrix.preset }} \
-              -DCMAKE_C_COMPILER=gcc-14 \
-              -DCMAKE_CXX_COMPILER=g++-14
+              -DCMAKE_C_COMPILER=gcc \
+              -DCMAKE_CXX_COMPILER=g++
           fi
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
@@ -67,24 +56,21 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build clang-18 llvm-18
+          sudo apt-get install -y ninja-build clang llvm lcov
       - name: Configure & Build with Coverage
-        env:
-          CC: clang-18
-          CXX: clang++-18
         run: |
           cmake -B build/coverage -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_C_COMPILER=clang-18 \
-            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
             -DENABLE_COVERAGE=ON
           cmake --build build/coverage
       - name: Run Test Suite
         run: ctest --test-dir build/coverage --output-on-failure
       - name: Generate Coverage Report
         run: |
-          llvm-profdata-18 merge -sparse default.profraw -o coverage.profdata || true
-          llvm-cov-18 show ./build/coverage/tests/test_needlefish_unit \
+          llvm-profdata merge -sparse default.profraw -o coverage.profdata || true
+          llvm-cov show ./build/coverage/tests/test_needlefish_unit \
             -instr-profile=coverage.profdata \
             -ignore-filename-regex='(tests/|_deps/)' \
             -format=text > coverage.txt || true
