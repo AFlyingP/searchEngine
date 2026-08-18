@@ -1,11 +1,11 @@
-#include <gtest/gtest.h>
-#include "sa/sais.hpp"
-
 #include <algorithm>
+#include <gtest/gtest.h>
 #include <numeric>
 #include <random>
 #include <string>
 #include <vector>
+
+#include "sa/sais.hpp"
 
 using namespace needlefish;
 
@@ -18,8 +18,7 @@ std::vector<size_t> naive_suffix_sort(std::string_view text) {
     std::iota(sa.begin(), sa.end(), 0);
 
     std::sort(sa.begin(), sa.end(), [&](size_t a, size_t b) {
-        return std::string_view(text.data() + a, n - a) <
-               std::string_view(text.data() + b, n - b);
+        return std::string_view(text.data() + a, n - a) < std::string_view(text.data() + b, n - b);
     });
 
     return sa;
@@ -28,7 +27,8 @@ std::vector<size_t> naive_suffix_sort(std::string_view text) {
 // Oracle 2: Prefix Doubling (Larsson-Sadakane style O(n log^2 n))
 std::vector<size_t> doubling_suffix_sort(std::string_view text) {
     const size_t n = text.size();
-    if (n == 0) return {};
+    if (n == 0)
+        return {};
 
     std::vector<size_t> sa(n);
     std::iota(sa.begin(), sa.end(), 0);
@@ -42,7 +42,8 @@ std::vector<size_t> doubling_suffix_sort(std::string_view text) {
 
     for (size_t k = 1; k < n; k *= 2) {
         auto cmp = [&](size_t i, size_t j) {
-            if (rank[i] != rank[j]) return rank[i] < rank[j];
+            if (rank[i] != rank[j])
+                return rank[i] < rank[j];
             int64_t ri = (i + k < n) ? rank[i + k] : -1;
             int64_t rj = (j + k < n) ? rank[j + k] : -1;
             return ri < rj;
@@ -81,7 +82,8 @@ TEST(SaisPropertyTest, CompareAgainstNaiveOracle) {
 
         ASSERT_EQ(sa_sais.size(), sa_naive.size());
         for (size_t i = 0; i < len; ++i) {
-            ASSERT_EQ(sa_sais[i], sa_naive[i]) << "Mismatch at index " << i << " in trial " << trial;
+            ASSERT_EQ(sa_sais[i], sa_naive[i])
+                << "Mismatch at index " << i << " in trial " << trial;
         }
     }
 }

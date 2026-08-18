@@ -38,8 +38,8 @@ std::vector<IndexType> sais_internal(std::span<const IndexType> s, size_t alphab
         // SA array: n * sizeof(IndexType)
         // buckets: alphabet_size * sizeof(size_t) * 2
         // lms positions & aux: ~n * sizeof(IndexType)
-        const size_t level_mem = n * sizeof(uint8_t) + n * sizeof(IndexType) * 2 +
-                                 alphabet_size * sizeof(size_t) * 2;
+        const size_t level_mem =
+            n * sizeof(uint8_t) + n * sizeof(IndexType) * 2 + alphabet_size * sizeof(size_t) * 2;
         stats->peak_memory_bytes += level_mem;
     }
 
@@ -57,9 +57,7 @@ std::vector<IndexType> sais_internal(std::span<const IndexType> s, size_t alphab
         }
     }
 
-    auto is_lms = [&](size_t i) -> bool {
-        return i > 0 && t[i] == S_TYPE && t[i - 1] == L_TYPE;
-    };
+    auto is_lms = [&](size_t i) -> bool { return i > 0 && t[i] == S_TYPE && t[i - 1] == L_TYPE; };
 
     // 2. Count bucket sizes and compute bucket heads and tails
     std::vector<size_t> bucket_counts(alphabet_size, 0);
@@ -224,8 +222,7 @@ std::vector<IndexType> sais_internal(std::span<const IndexType> s, size_t alphab
 
 template <typename IndexType>
 std::vector<IndexType> SaisBuilder<IndexType>::build(std::span<const IndexType> s,
-                                                    size_t alphabet_size,
-                                                    SaisStats* stats) {
+                                                     size_t alphabet_size, SaisStats* stats) {
     if (stats) {
         stats->text_length = s.size();
         stats->peak_memory_bytes = 0;

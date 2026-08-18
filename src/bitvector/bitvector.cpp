@@ -76,8 +76,7 @@ BitVector BitVector::deserialize(std::istream& is) {
     return bv;
 }
 
-RankSelectBitVector::RankSelectBitVector(BitVector bv)
-    : bv_(std::move(bv)), size_(bv_.size()) {
+RankSelectBitVector::RankSelectBitVector(BitVector bv) : bv_(std::move(bv)), size_(bv_.size()) {
     build_directory();
 }
 

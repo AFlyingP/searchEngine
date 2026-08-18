@@ -110,7 +110,8 @@ void FMIndex::build(std::span<const uint8_t> text, size_t sample_rate) {
     sampled_rows_bv_ = RankSelectBitVector(std::move(sampled_bv));
 }
 
-std::pair<size_t, size_t> FMIndex::backward_search(std::span<const uint8_t> pattern) const noexcept {
+std::pair<size_t, size_t> FMIndex::backward_search(
+    std::span<const uint8_t> pattern) const noexcept {
     if (pattern.empty() || text_size_ == 0) {
         return {0, 0};
     }
@@ -136,8 +137,8 @@ std::pair<size_t, size_t> FMIndex::backward_search(std::span<const uint8_t> patt
 }
 
 std::pair<size_t, size_t> FMIndex::backward_search(std::string_view pattern) const noexcept {
-    return backward_search(std::span<const uint8_t>(
-        reinterpret_cast<const uint8_t*>(pattern.data()), pattern.size()));
+    return backward_search(
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(pattern.data()), pattern.size()));
 }
 
 size_t FMIndex::count(std::span<const uint8_t> pattern) const noexcept {
@@ -191,8 +192,8 @@ std::vector<size_t> FMIndex::locate(std::span<const uint8_t> pattern) const {
 }
 
 std::vector<size_t> FMIndex::locate(std::string_view pattern) const {
-    return locate(std::span<const uint8_t>(
-        reinterpret_cast<const uint8_t*>(pattern.data()), pattern.size()));
+    return locate(
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(pattern.data()), pattern.size()));
 }
 
 std::string FMIndex::extract(size_t begin, size_t end) const {

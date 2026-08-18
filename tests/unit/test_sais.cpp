@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
-#include "sa/sais.hpp"
-
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "sa/sais.hpp"
 
 using namespace needlefish;
 
@@ -17,8 +17,8 @@ TEST(SaisTest, ClassicMississippi) {
     for (size_t i = 1; i < sa.size(); ++i) {
         std::string_view prev(text.data() + sa[i - 1], text.size() - sa[i - 1]);
         std::string_view curr(text.data() + sa[i], text.size() - sa[i]);
-        EXPECT_LT(prev, curr) << "Suffix at " << i - 1 << " (" << prev << ") not less than suffix at "
-                              << i << " (" << curr << ")";
+        EXPECT_LT(prev, curr) << "Suffix at " << i - 1 << " (" << prev
+                              << ") not less than suffix at " << i << " (" << curr << ")";
     }
 }
 
@@ -33,7 +33,8 @@ TEST(SaisTest, AdversarialRepetitive) {
 
     // Periodic "abababab..."
     std::string ab;
-    for (int i = 0; i < 50; ++i) ab += "ab";
+    for (int i = 0; i < 50; ++i)
+        ab += "ab";
     auto sa_ab = build_suffix_array(ab);
     ASSERT_EQ(sa_ab.size(), 100);
 

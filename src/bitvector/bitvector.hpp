@@ -16,11 +16,11 @@ namespace needlefish {
 
 /**
  * @brief Plain bitvector stored as a sequence of 64-bit unsigned integers.
- * 
+ *
  * Provides O(1) bit access, modification, and basic bitwise operations.
  */
 class BitVector {
-public:
+  public:
     BitVector() = default;
     explicit BitVector(size_t num_bits, bool default_val = false);
 
@@ -36,9 +36,7 @@ public:
         return (words_[index / 64] & (1ULL << (index % 64))) != 0;
     }
 
-    [[nodiscard]] bool operator[](size_t index) const noexcept {
-        return get(index);
-    }
+    [[nodiscard]] bool operator[](size_t index) const noexcept { return get(index); }
 
     void set(size_t index, bool val = true) noexcept {
         const size_t w = index / 64;
@@ -58,25 +56,25 @@ public:
     void serialize(std::ostream& os) const;
     static BitVector deserialize(std::istream& is);
 
-private:
+  private:
     size_t num_bits_{0};
     std::vector<uint64_t> words_{};
 };
 
 /**
  * @brief Rank and Select directory structure over a BitVector.
- * 
+ *
  * Superblocks are placed every 512 bits (8 uint64_t words).
  * Each superblock entry stores:
  *   - uint64_t cumulative 1-bit count up to the superblock start.
  *   - uint16_t relative 1-bit count for each of the 8 sub-blocks (words).
- * 
+ *
  * Guarantees:
  *   - rank1(i) in O(1) time (< 5ns hot).
  *   - select1(k) in O(log(n/512)) + O(1) time.
  */
 class RankSelectBitVector {
-public:
+  public:
     struct DirectoryEntry {
         uint64_t superblock_rank{0};
         uint16_t subblock_ranks[8]{0, 0, 0, 0, 0, 0, 0, 0};
@@ -122,13 +120,9 @@ public:
      */
     [[nodiscard]] size_t select0(size_t k) const noexcept;
 
-    [[nodiscard]] bool get(size_t index) const noexcept {
-        return bv_.get(index);
-    }
+    [[nodiscard]] bool get(size_t index) const noexcept { return bv_.get(index); }
 
-    [[nodiscard]] bool operator[](size_t index) const noexcept {
-        return bv_.get(index);
-    }
+    [[nodiscard]] bool operator[](size_t index) const noexcept { return bv_.get(index); }
 
     [[nodiscard]] size_t size() const noexcept { return size_; }
     [[nodiscard]] bool empty() const noexcept { return size_ == 0; }
@@ -139,7 +133,7 @@ public:
     void serialize(std::ostream& os) const;
     static RankSelectBitVector deserialize(std::istream& is);
 
-private:
+  private:
     void build_directory();
 
     BitVector bv_{};

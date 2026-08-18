@@ -1,14 +1,14 @@
 #include <gtest/gtest.h>
-#include "wavelet/wavelet_tree.hpp"
-
 #include <random>
 #include <string>
 #include <vector>
 
+#include "wavelet/wavelet_tree.hpp"
+
 using namespace needlefish;
 
 class WaveletOracle {
-public:
+  public:
     explicit WaveletOracle(std::string text) : text_(std::move(text)) {
         for (size_t i = 0; i < text_.size(); ++i) {
             uint8_t c = static_cast<uint8_t>(text_[i]);
@@ -16,9 +16,7 @@ public:
         }
     }
 
-    uint8_t access(size_t index) const {
-        return static_cast<uint8_t>(text_[index]);
-    }
+    uint8_t access(size_t index) const { return static_cast<uint8_t>(text_[index]); }
 
     size_t rank(uint8_t c, size_t index) const {
         size_t count = 0;
@@ -38,7 +36,7 @@ public:
         return positions_[c][k - 1];
     }
 
-private:
+  private:
     std::string text_;
     std::array<std::vector<size_t>, 256> positions_{};
 };

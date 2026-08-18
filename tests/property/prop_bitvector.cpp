@@ -1,13 +1,13 @@
 #include <gtest/gtest.h>
-#include "bitvector/bitvector.hpp"
-
 #include <random>
 #include <vector>
+
+#include "bitvector/bitvector.hpp"
 
 using namespace needlefish;
 
 class BitVectorOracle {
-public:
+  public:
     explicit BitVectorOracle(const std::vector<bool>& bits) : bits_(bits) {
         prefix_ones_.resize(bits.size() + 1, 0);
         for (size_t i = 0; i < bits.size(); ++i) {
@@ -21,26 +21,30 @@ public:
     }
 
     size_t rank1(size_t index) const {
-        if (index >= bits_.size()) return prefix_ones_.back();
+        if (index >= bits_.size())
+            return prefix_ones_.back();
         return prefix_ones_[index];
     }
 
     size_t rank0(size_t index) const {
-        if (index >= bits_.size()) return bits_.size() - prefix_ones_.back();
+        if (index >= bits_.size())
+            return bits_.size() - prefix_ones_.back();
         return index - rank1(index);
     }
 
     size_t select1(size_t k) const {
-        if (k == 0 || k > one_positions_.size()) return bits_.size();
+        if (k == 0 || k > one_positions_.size())
+            return bits_.size();
         return one_positions_[k - 1];
     }
 
     size_t select0(size_t k) const {
-        if (k == 0 || k > zero_positions_.size()) return bits_.size();
+        if (k == 0 || k > zero_positions_.size())
+            return bits_.size();
         return zero_positions_[k - 1];
     }
 
-private:
+  private:
     std::vector<bool> bits_;
     std::vector<size_t> prefix_ones_;
     std::vector<size_t> one_positions_;

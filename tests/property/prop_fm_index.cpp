@@ -1,17 +1,18 @@
-#include <gtest/gtest.h>
-#include "fm/fm_index.hpp"
-
 #include <algorithm>
+#include <gtest/gtest.h>
 #include <random>
 #include <string>
 #include <vector>
+
+#include "fm/fm_index.hpp"
 
 using namespace needlefish;
 
 namespace {
 
 std::vector<size_t> brute_force_locate(std::string_view text, std::string_view pattern) {
-    if (pattern.empty()) return {};
+    if (pattern.empty())
+        return {};
     std::vector<size_t> positions;
     size_t pos = text.find(pattern, 0);
     while (pos != std::string_view::npos) {
@@ -25,7 +26,8 @@ std::vector<size_t> brute_force_locate(std::string_view text, std::string_view p
 
 TEST(FMIndexPropertyTest, TenThousandRandomQueries) {
     std::mt19937_64 rng(777);
-    std::uniform_int_distribution<int> char_dist('a', 'f');  // 6 char alphabet to ensure ample substrings
+    std::uniform_int_distribution<int> char_dist(
+        'a', 'f');  // 6 char alphabet to ensure ample substrings
 
     const size_t text_len = 10000;
     std::string text(text_len, '\0');
@@ -56,7 +58,8 @@ TEST(FMIndexPropertyTest, TenThousandRandomQueries) {
             // Random pattern (may or may not exist)
             size_t l = len_dist(rng);
             pattern.resize(l);
-            for (size_t i = 0; i < l; ++i) pattern[i] = static_cast<char>(char_dist(rng));
+            for (size_t i = 0; i < l; ++i)
+                pattern[i] = static_cast<char>(char_dist(rng));
         } else if (p_type == 3) {
             // Pattern with foreign character (guaranteed 0 matches)
             pattern = "xyz";

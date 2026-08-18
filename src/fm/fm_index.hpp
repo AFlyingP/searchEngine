@@ -1,32 +1,33 @@
 #pragma once
 
-#include "bitvector/bitvector.hpp"
-#include "sa/sais.hpp"
-#include "wavelet/wavelet_tree.hpp"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <iosfwd>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "bitvector/bitvector.hpp"
+#include "sa/sais.hpp"
+#include "wavelet/wavelet_tree.hpp"
+
 namespace needlefish {
 
 /**
  * @brief FM-Index (Burrows-Wheeler Transform + Wavelet Tree + Sampled Suffix Array).
- * 
+ *
  * Provides:
  *   - count(P): O(m) exact substring occurrence count.
  *   - locate(P): O(m + occ * s) exact occurrence position retrieval.
  *   - extract(begin, end): O(len + s) text snippet reconstruction.
- * 
+ *
  * Hand-implemented without external dependencies.
  */
 class FMIndex {
-public:
+  public:
     static constexpr size_t DEFAULT_SAMPLE_RATE = 32;
 
     FMIndex() = default;
@@ -83,7 +84,7 @@ public:
     void serialize(std::ostream& os) const;
     static FMIndex deserialize(std::istream& is);
 
-private:
+  private:
     void build(std::span<const uint8_t> text, size_t sample_rate);
     [[nodiscard]] size_t locate_row(size_t r) const noexcept;
 

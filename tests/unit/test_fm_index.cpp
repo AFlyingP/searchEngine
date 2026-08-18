@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
-#include "fm/fm_index.hpp"
-
 #include <sstream>
 #include <string>
 #include <vector>
+
+#include "fm/fm_index.hpp"
 
 using namespace needlefish;
 

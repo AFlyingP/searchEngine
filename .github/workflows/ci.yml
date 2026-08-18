@@ -16,7 +16,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang-format
       - name: Check Formatting
         run: |
-          find src tests cli server bench fuzz -name '*.cpp' -o -name '*.hpp' | xargs clang-format --dry-run --Werror
+          find src tests cli bench -name '*.cpp' -o -name '*.hpp' | xargs clang-format --dry-run --Werror
 
   build-test:
     name: Build & Test (${{ matrix.compiler }}, ${{ matrix.preset }})
@@ -33,16 +33,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build
           if [ "${{ matrix.compiler }}" = "gcc" ]; then
-            sudo apt-get install -y g++-12
-            echo "CC=gcc-12" >> $GITHUB_ENV
-            echo "CXX=g++-12" >> $GITHUB_ENV
+            sudo apt-get install -y g++-14
+            echo "CC=gcc-14" >> $GITHUB_ENV
+            echo "CXX=g++-14" >> $GITHUB_ENV
           else
-            sudo apt-get install -y clang-15
-            echo "CC=clang-15" >> $GITHUB_ENV
-            echo "CXX=clang++-15" >> $GITHUB_ENV
+            sudo apt-get install -y clang-18
+            echo "CC=clang-18" >> $GITHUB_ENV
+            echo "CXX=clang++-18" >> $GITHUB_ENV
           fi
       - name: Configure CMake
-        run: cmake --preset ${{ matrix.preset }}
+        run: cmake --preset ${{ matrix.preset }} -DCMAKE_C_COMPILER=${CC} -DCMAKE_CXX_COMPILER=${CXX}
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Run Tests
@@ -56,22 +56,24 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build clang-15 llvm-15 lcov
+          sudo apt-get install -y ninja-build clang-18 llvm-18
       - name: Configure & Build with Coverage
         env:
-          CC: clang-15
-          CXX: clang++-15
+          CC: clang-18
+          CXX: clang++-18
         run: |
           cmake -B build/coverage -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER=clang-18 \
+            -DCMAKE_CXX_COMPILER=clang++-18 \
             -DENABLE_COVERAGE=ON
           cmake --build build/coverage
       - name: Run Test Suite
         run: ctest --test-dir build/coverage --output-on-failure
       - name: Generate Coverage Report
         run: |
-          llvm-profdata-15 merge -sparse default.profraw -o coverage.profdata || true
-          llvm-cov-15 show ./build/coverage/tests/unit/test_needlefish_unit \
+          llvm-profdata-18 merge -sparse default.profraw -o coverage.profdata || true
+          llvm-cov-18 show ./build/coverage/tests/test_needlefish_unit \
             -instr-profile=coverage.profdata \
             -ignore-filename-regex='(tests/|_deps/)' \
             -format=text > coverage.txt || true

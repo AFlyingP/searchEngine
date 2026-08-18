@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
-#include "bitvector/bitvector.hpp"
-
 #include <sstream>
+
+#include "bitvector/bitvector.hpp"
 
 using namespace needlefish;
 

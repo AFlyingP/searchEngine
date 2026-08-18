@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
-#include "wavelet/wavelet_tree.hpp"
-
 #include <sstream>
 #include <string>
+
+#include "wavelet/wavelet_tree.hpp"
 
 using namespace needlefish;
 

@@ -1,12 +1,12 @@
 #include <benchmark/benchmark.h>
+#include <random>
+#include <string>
+#include <vector>
+
 #include "bitvector/bitvector.hpp"
 #include "fm/fm_index.hpp"
 #include "sa/sais.hpp"
 #include "wavelet/wavelet_tree.hpp"
-
-#include <random>
-#include <string>
-#include <vector>
 
 using namespace needlefish;
 
@@ -93,7 +93,8 @@ static void BM_FMIndex_BackwardSearch_10Char(benchmark::State& state) {
     std::vector<std::string> patterns;
     for (int i = 0; i < 1000; ++i) {
         std::string p;
-        for (int j = 0; j < 10; ++j) p += static_cast<char>(dist(rng));
+        for (int j = 0; j < 10; ++j)
+            p += static_cast<char>(dist(rng));
         patterns.push_back(p);
     }
 
