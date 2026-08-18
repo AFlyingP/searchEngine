@@ -5,6 +5,7 @@
 
 #include "bitvector/bitvector.hpp"
 #include "fm/fm_index.hpp"
+#include "invidx/compression.hpp"
 #include "sa/sais.hpp"
 #include "wavelet/wavelet_tree.hpp"
 
@@ -125,6 +126,55 @@ static void BM_FMIndex_Locate(benchmark::State& state) {
     }
     state.SetItemsProcessed(state.iterations());
 }
-BENCHMARK(BM_FMIndex_Locate);
+// 6. Posting Decode Benchmark (Scalar vs SIMD, 1M postings)
+static void BM_Posting_Decode_Scalar(benchmark::State& state) {
+    const size_t num_blocks = 8000;  // ~1,024,000 postings
+    std::vector<uint32_t> test_data(num_blocks * 128);
+    std::mt19937 rng(42);
+    for (size_t i = 0; i < test_data.size(); ++i) {
+        test_data[i] = rng() % 255;  // 8-bit width
+    }
+
+    std::vector<uint8_t> packed_blocks(num_blocks * 16 * 8);
+    for (size_t b = 0; b < num_blocks; ++b) {
+        BitPacking::pack128(&test_data[b * 128], &packed_blocks[b * 16 * 8], 8);
+    }
+
+    uint32_t out[128];
+    for (auto _ : state) {
+        for (size_t b = 0; b < num_blocks; ++b) {
+            BitPacking::unpack128_scalar(&packed_blocks[b * 16 * 8], out, 8);
+            benchmark::DoNotOptimize(out);
+        }
+    }
+    state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) *
+                            static_cast<int64_t>(num_blocks * 128));
+}
+BENCHMARK(BM_Posting_Decode_Scalar);
+
+static void BM_Posting_Decode_SIMD(benchmark::State& state) {
+    const size_t num_blocks = 8000;  // ~1,024,000 postings
+    std::vector<uint32_t> test_data(num_blocks * 128);
+    std::mt19937 rng(42);
+    for (size_t i = 0; i < test_data.size(); ++i) {
+        test_data[i] = rng() % 255;  // 8-bit width
+    }
+
+    std::vector<uint8_t> packed_blocks(num_blocks * 16 * 8);
+    for (size_t b = 0; b < num_blocks; ++b) {
+        BitPacking::pack128(&test_data[b * 128], &packed_blocks[b * 16 * 8], 8);
+    }
+
+    uint32_t out[128];
+    for (auto _ : state) {
+        for (size_t b = 0; b < num_blocks; ++b) {
+            BitPacking::unpack128(&packed_blocks[b * 16 * 8], out, 8);
+            benchmark::DoNotOptimize(out);
+        }
+    }
+    state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) *
+                            static_cast<int64_t>(num_blocks * 128));
+}
+BENCHMARK(BM_Posting_Decode_SIMD);
 
 BENCHMARK_MAIN();
