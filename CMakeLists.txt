@@ -23,6 +23,18 @@ add_library(needlefish_core
     src/wavelet/wavelet_tree.cpp
     src/sa/sais.cpp
     src/fm/fm_index.cpp
+    src/util/utf8.cpp
+    src/util/porter_stemmer.cpp
+    src/util/analyzer.cpp
+    src/invidx/compression.cpp
+    src/invidx/postings.cpp
+    src/invidx/radix_trie.cpp
+    src/invidx/index_builder.cpp
+    src/store/mmap.cpp
+    src/store/index_file.cpp
+    src/rank/wand.cpp
+    src/rank/query_eval.cpp
+    src/rank/snippet.cpp
 )
 
 target_include_directories(needlefish_core

@@ -62,30 +62,89 @@
 
 ---
 
-## 2. Directory Layout & Module Organization
+## 3. Inverted Index, Ranking, and Storage Format (Phase 2)
+
+### 3.1 Text Processing & Analyzer (`needlefish::Analyzer`)
+- **UTF-8 Streaming Decoder**: Converts byte streams to 32-bit codepoints, replacing malformed bytes with `U+FFFD`.
+- **Unicode Word Segmentation**: Extracts letter and digit sequences across ASCII, Latin-1, Greek, Cyrillic, and CJK ideographs.
+- **Porter Stemmer**: Strict C++20 implementation of Martin Porter's 1980 algorithm passing all 23,531 official published test vectors (`voc.txt` $\to$ `output.txt`).
+- **Stopwords**: Configurable filter with English defaults.
+
+---
+
+### 3.2 Posting List Compression & Block Structure (`needlefish::PostingListWriter` / `PostingListReader`)
+- **Block Size**: 128 docIDs per block.
+- **DocID Compression**: Frame-Of-Reference (FOR) bit-width packing with delta encoding. Decodes at **> 1.36 Billion postings/s**.
+- **Term Frequencies**: 7-bit continuation Variable-Byte (VByte).
+- **Positions**: Delta-encoded VByte stream stored in a dedicated positions section (only loaded for phrase queries).
+- **Block Header**:
+  ```
+  +----------------------+--------------------------+--------------------+--------------------+-----------------------+---------------------+
+  | max_doc_id (uint32)  | block_max_score (float)  | num_docs (uint16)  | bit_width (uint8)  | pos_offset (uint32)   | pos_bytes (uint32)  |
+  +----------------------+--------------------------+--------------------+--------------------+-----------------------+---------------------+
+  ```
+
+---
+
+### 3.3 Contiguous Flattened Radix Trie (`needlefish::RadixTrie`)
+- **Memory Representation**: Stored in a single flat array of 32-byte `RadixNode` structures with zero heap pointer chasing.
+- **Structure**:
+  - `edge_offset` & `edge_len`: Offset and length in contiguous string pool buffer.
+  - `first_child` & `next_sibling`: 32-bit indices into the flat node array.
+  - `TermPayload`: Term ID, document frequency, postings byte offset, postings byte length, max BM25 score.
+- **Capabilities**:
+  - Exact term lookup in $O(m)$ time.
+  - Search-as-you-type prefix search.
+  - DFA / Automaton lockstep DFS traversal for Levenshtein / fuzzy search.
+
+---
+
+### 3.4 Query Evaluation & Block-Max WAND (`needlefish::QueryEvaluator`)
+- **BM25 Scoring**:
+  $$score(D, Q) = \sum_{t \in Q} \ln\left(1 + \frac{N - n(t) + 0.5}{n(t) + 0.5}\right) \cdot \frac{f(t, D) \cdot (k_1 + 1)}{f(t, D) + k_1 \cdot (1 - b + b \cdot \frac{|D|}{\text{avgdl}})}$$
+  (Default parameters: $k_1 = 0.9$, $b = 0.4$).
+- **Block-Max WAND (Weak AND)**: Dynamic pruning for disjunctive top-$k$ min-heap queries. Computes accumulated block-max scores to pivot and skip entire non-matching doc blocks without decoding posting deltas.
+- **Galloping AND Conjunction**: Exponential search on posting lists for exact multi-term intersection.
+- **Positional Phrase Queries**: Consecutive token position verification ($p_{i+1} = p_i + 1$).
+- **Snippet Generator**: Best-window sentence selector with HTML query term markers (`<em>term</em>`).
+
+---
+
+### 3.5 Memory-Mapped `.idx` Binary File Layout
+
+All sections are strictly 64-byte aligned for zero-copy direct mapping:
 
 ```
-/
-├── CMakeLists.txt              # Root build configuration (C++20, -Wall -Wextra -Wpedantic -Werror)
-├── CMakePresets.json           # Standard presets (debug, release, sanitize, tsan, bench)
-├── .clang-format               # Formatting guidelines
-├── .clang-tidy                 # Linter configuration
-├── .github/workflows/
-│   ├── ci.yml                  # Matrix {gcc, clang} x {debug, release, sanitize} + coverage
-│   └── release.yml             # Release binaries & GHCR Docker packaging
-├── src/                        # libindex core library (zero external dependencies)
-│   ├── bitvector/              # Rank/Select bitvector
-│   ├── wavelet/                # 8-level byte Wavelet Tree
-│   ├── sa/                     # SA-IS linear-time suffix array
-│   └── fm/                     # FM-Index and Burrows-Wheeler Transform
-├── cli/                        # CLI tool (index, search, suggest, stats)
-├── tests/                      # Unit & property test suites
-│   ├── unit/                   # Deterministic & boundary tests
-│   └── property/               # Exhaustive differential oracle property tests
-├── bench/                      # Performance benchmarking harness
-│   ├── fetch_corpora.sh        # SHA256-verified corpus download utility
-│   └── bench_main.cpp          # Google Benchmark suite
-└── docs/                       # Design documents & benchmark metrics
-    ├── design.md
-    └── benchmarks_phase1.md
++---------------------------------------------------------------------------------------------------+
+| INDEX HEADER (64 bytes aligned)                                                                   |
+|   Magic ("NFLSHIDX", 8B) | Version (u32) | NumSections (u32) | TotalFileSize (u64)                |
++---------------------------------------------------------------------------------------------------+
+| SECTION TABLE                                                                                     |
+|   [Section 1: Stats]         Offset (u64) | Length (u64) | CRC32 (u32)                            |
+|   [Section 2: DocMetadata]   Offset (u64) | Length (u64) | CRC32 (u32)                            |
+|   [Section 3: StoredFields]  Offset (u64) | Length (u64) | CRC32 (u32)                            |
+|   [Section 4: TermDict]      Offset (u64) | Length (u64) | CRC32 (u32)                            |
+|   [Section 5: Postings]      Offset (u64) | Length (u64) | CRC32 (u32)                            |
+|   [Section 6: Positions]     Offset (u64) | Length (u64) | CRC32 (u32)                            |
+|   [Section 7: FMIndex]       Offset (u64) | Length (u64) | CRC32 (u32)                            |
++---------------------------------------------------------------------------------------------------+
+| SECTION 1: BM25 STATS (64-byte aligned)                                                           |
+|   total_docs (u32) | total_tokens (u64) | avg_doc_len (double)                                    |
++---------------------------------------------------------------------------------------------------+
+| SECTION 2: DOC METADATA (64-byte aligned)                                                         |
+|   Array of DocMetadataRecord { doc_id, token_count, title_offset, title_len, text_offset, ... }   |
++---------------------------------------------------------------------------------------------------+
+| SECTION 3: STORED FIELDS (64-byte aligned)                                                        |
+|   Contiguous UTF-8 bytes for original document titles and text for snippets                        |
++---------------------------------------------------------------------------------------------------+
+| SECTION 4: TERM DICTIONARY & RADIX TRIE (64-byte aligned)                                         |
+|   Serialized contiguous RadixNode table and string pool                                           |
++---------------------------------------------------------------------------------------------------+
+| SECTION 5: COMPRESSED POSTINGS (64-byte aligned)                                                  |
+|   128-docID FOR blocks [Header | FOR Bit-Packed Deltas | Varint Freqs | Varint PosLengths]         |
++---------------------------------------------------------------------------------------------------+
+| SECTION 6: POSITIONS STREAM (64-byte aligned)                                                     |
+|   Varint delta-encoded positional streams for phrase queries                                      |
++---------------------------------------------------------------------------------------------------+
 ```
+
