@@ -171,6 +171,10 @@ void IndexBuilder::accumulate_document(uint32_t doc_id, std::string_view title,
             .positions = std::move(pos_vec)
         });
     }
+
+    estimated_memory_usage_ = stored_fields_.size() +
+                              doc_metadata_.size() * sizeof(DocMetadataRecord) +
+                              term_postings_.size() * 64;
 }
 
 size_t IndexBuilder::index_jsonl_file(const std::filesystem::path& jsonl_path) {

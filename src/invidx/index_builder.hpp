@@ -50,6 +50,8 @@ class IndexBuilder {
 
     [[nodiscard]] size_t total_docs() const noexcept { return doc_metadata_.size(); }
     [[nodiscard]] size_t total_terms() const noexcept { return term_postings_.size(); }
+    [[nodiscard]] size_t memory_budget() const noexcept { return memory_budget_; }
+    [[nodiscard]] size_t estimated_memory_usage() const noexcept { return estimated_memory_usage_; }
 
   private:
     void accumulate_document(uint32_t doc_id, std::string_view title, std::string_view text);
