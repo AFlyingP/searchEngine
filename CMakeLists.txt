@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(needlefish VERSION 0.1.0 LANGUAGES CXX)
+project(needlefish VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -50,8 +50,21 @@ endif()
 target_include_directories(needlefish_core
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
 )
+
+# C API Shared Library
+add_library(needlefish_c SHARED
+    src/c_api/needlefish_c.cpp
+)
+target_link_libraries(needlefish_c PRIVATE needlefish_core)
+target_include_directories(needlefish_c
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+)
+target_compile_definitions(needlefish_c PRIVATE NEEDLEFISH_EXPORTS)
 
 # Strict warning flags
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -96,12 +109,52 @@ if (ENABLE_LTO)
     endif()
 endif()
 
-# CLI Executable placeholder
+# CLI Executable
 add_executable(needlefish_cli
     cli/main.cpp
 )
 target_link_libraries(needlefish_cli PRIVATE needlefish_core)
 set_target_properties(needlefish_cli PROPERTIES OUTPUT_NAME "needlefish")
+
+# Install rules & CMake Package Config
+include(GNUInstallDirs)
+
+install(TARGETS needlefish_core needlefish_c needlefish_cli
+    EXPORT NeedlefishTargets
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(DIRECTORY src/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/needlefish
+    FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h"
+)
+
+install(EXPORT NeedlefishTargets
+    FILE NeedlefishTargets.cmake
+    NAMESPACE needlefish::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Needlefish
+)
+
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/NeedlefishConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/NeedlefishConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Needlefish
+)
+
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/NeedlefishConfigVersion.cmake
+    VERSION 1.0.0
+    COMPATIBILITY SameMajorVersion
+)
+
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/NeedlefishConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/NeedlefishConfigVersion.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Needlefish
+)
 
 # Fuzzers
 if (BUILD_FUZZERS)
@@ -119,7 +172,6 @@ if (BUILD_TESTS OR BUILD_BENCHMARKS)
             URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
             DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         )
-        # Suppress warnings in googletest
         set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
         FetchContent_MakeAvailable(googletest)
         enable_testing()

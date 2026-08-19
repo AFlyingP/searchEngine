@@ -1,164 +1,213 @@
-# needlefish
+# Needlefish
 
-[![CI](https://github.com/AFlyingP/searchEngine/actions/workflows/ci.yml/badge.svg)](https://github.com/AFlyingP/searchEngine/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
+**Needlefish** is an embedded, zero-external-dependency, succinct search and substring indexing engine built in modern ISO C++20. It combines Okapi BM25 ranking (accelerated by Block-Max WAND dynamic pruning) with succinct full-text indexing (linear-time SA-IS suffix array construction, Burrows-Wheeler Transform, and wavelet tree-backed FM-Index) inside a single memory-mapped container format (`.idx`).
 
-**needlefish** is an ultra-fast full-text and succinct search engine implemented from scratch in modern **C++20** with **zero external dependencies** in the core indexing and ranking library.
-
-It combines state-of-the-art information retrieval algorithms (Okapi BM25, Block-Max WAND dynamic pruning, Frame-of-Reference posting compression) with compressed succinct data structures (linear-time SA-IS Suffix Array, Byte Wavelet Trees, and FM-Indexes).
+- **Live Web Demo**: [needlepig.aflyingbay49.workers.dev](https://needlepig.aflyingbay49.workers.dev)
+- **Zero Runtime Dependencies**: Written entirely in standard C++20 without external libraries.
+- **Sub-Millisecond Retrieval**: Evaluates queries over 272,000+ Wikipedia articles in under 1 ms.
 
 ---
 
-## Performance Highlights
+## Architecture Overview
 
-| Benchmark | Latency / Op | Throughput | Description |
-| :--- | :--- | :--- | :--- |
-| **`Posting Decode (FOR)`** | **0.73 ns / posting** | **1.365 Billion postings/s** | Frame-Of-Reference 128-docID delta decompression |
-| **`BitVector Rank1`** | **1.91 ns** | **525.1 Million ops/s** | 512-bit superblock $O(1)$ popcount rank |
-| **`BitVector Select1`** | **49.7 ns** | **20.1 Million ops/s** | Binary search + BMI2 `_pdep_u64` bit scan |
-| **`FM-Index Search`** | **921 ns** | **1.086 Million queries/s** | 10-character exact backward search count |
-| **`Regex Scan`** | **1.24 ms / 100KB** | **76.59 MB/s** | Linear-time non-backtracking Powerset DFA scan |
-| **`Levenshtein Intersect`**| **2.71 ms** | **368 queries/s** | Parametric Levenshtein DFA over 50,000-term Radix Trie |
-| **`Index Load Latency`** | **< 10 ms** | **Instantaneous** | Memory-mapped zero-copy section binding |
-
-*Benchmarks measured on x86-64 with `-O3 -march=native` using Google Benchmark.*
-
----
-
-## Key Features
-
-* **Zero Third-Party Core Dependencies**: Core library (`libneedlefish_core`) relies exclusively on the C++20 standard library.
-* **Succinct Data Structures**:
-  * **Rank/Select BitVector**: 512-bit superblocks with 64-bit sub-blocks and BMI2 acceleration.
-  * **Byte Wavelet Tree**: 8-level bit-sliced balanced binary tree over byte alphabets for $O(1)$ `access`, `rank`, and `select`.
-  * **SA-IS Suffix Array**: Linear-time $O(n)$ induced sorting following Nong, Zhang, Chan (2009).
-  * **FM-Index & BWT**: Burrows-Wheeler Transform, C-table, Wavelet Occ table, and sampled suffix array locate queries.
-* **Inverted Index & Compression**:
-  * **128-docID Blocks**: Delta-encoded Frame-of-Reference (FOR) bit packing delivering **> 1.36B postings/sec**.
-  * **Variable-Byte Streams**: 7-bit continuation VByte for term frequencies and position streams.
-* **Contiguous Flat Radix Trie**:
-  * Array-indexed 32-byte nodes with zero heap pointer chasing for $O(m)$ term lookup and search-as-you-type prefix search.
-* **Query Evaluation & Ranking**:
-  * **Okapi BM25**: Scored ranking with configurable $k_1 = 0.9, b = 0.4$.
-  * **Block-Max WAND**: Dynamic pruning skips non-competitive document blocks without decoding posting deltas.
-  * **Boolean & Phrase Search**: Galloping intersection (`AND`), scored disjunction (`OR`), and consecutive token positions (`"phrase"`).
-* **Automata & Substring Engine**:
-  * **Non-Backtracking Regex**: Linear-time $O(n)$ matching via on-the-fly Powerset DFA with a 256-entry transition table per state.
-  * **Universal Levenshtein DFA**: Schulz & Mihov (2002) parametric automaton intersecting the contiguous Radix Trie in lockstep ($< 3 \text{ ms}$ over 50,000+ terms).
-  * **Search-As-You-Type Autocomplete**: Fast prefix completions and distance-weighted typo suggestions.
-* **Hybrid Query Engine**:
-  * Seamlessly routes natural language queries to BM25/WAND, typo queries (`term~2`) to Levenshtein automata, regex (`/pattern/`) to the DFA scanner, and raw substrings to the FM-Index.
-* **Embedded HTTP REST Server & Web UI**:
-  * Built-in zero-dependency HTTP server and modern dark/light web UI dashboard.
-* **Zero-Copy Memory-Mapped Storage**:
-  * Single `.idx` binary file format with 64-byte aligned sections and CRC-32 integrity validation.
-  * Instantaneous load time ($< 10 \text{ ms}$) via Windows `CreateFileMapping` / POSIX `mmap`.
-
----
-
-## Quick Start
-
-### Prerequisites
-* A C++20 compliant compiler: GCC 13+, Clang 16+, or MSVC 2022+
-* CMake 3.20+
-* Ninja (recommended)
-
-### Build
-```bash
-# Configure debug build
-cmake --preset debug
-
-# Build the CLI tool and test suite
-cmake --build --preset debug --target needlefish_cli
-cmake --build --preset debug --target test_needlefish_unit
-```
-
-### Run Tests
-```bash
-# Run unit & golden tests (45 tests including 23,531-word Porter golden suite)
-./build/debug/tests/test_needlefish_unit.exe
-
-# Run differential property tests (5,000 Levenshtein DFA vs DP matrix trials & 1,000 WAND trials)
-./build/debug/tests/test_needlefish_property.exe
+```text
+                                  +---------------------------------------+
+                                  |  HTTP REST Server / C & Python APIs   |
+                                  |   GET /api/search, /api/suggest, etc. |
+                                  +---------------------------------------+
+                                                     |
+                         +---------------------------+---------------------------+
+                         |                                                       |
+                         v                                                       v
+         +-------------------------------+                       +-------------------------------+
+         |    Ranked Retrieval Engine    |                       |   Fuzzy & Automata Engine     |
+         |    - Okapi BM25 Scorer        |                       |   - Schulz-Mihov DFA (k=1,2)  |
+         |    - Block-Max WAND Pruner    |                       |   - Flattened Radix Trie      |
+         |    - SIMD-BP128 Postings      |                       |   - Regex NFA/DFA Search      |
+         +-------------------------------+                       +-------------------------------+
+                         |                                                       |
+                         +---------------------------+---------------------------+
+                                                     |
+                                                     v
+                                  +---------------------------------------+
+                                  |      Succinct Substring Engine        |
+                                  |   - Linear-time SA-IS Suffix Array    |
+                                  |   - Burrows-Wheeler Transform (BWT)   |
+                                  |   - Bit-Sliced Wavelet Tree (Occ)     |
+                                  |   - Rank9 / Select O(1) Bitvectors    |
+                                  +---------------------------------------+
+                                                     |
+                                                     v
+                                  +---------------------------------------+
+                                  |   Single-File Zero-Copy Storage       |
+                                  |   - Fixed 64-byte Header (NFI\x01)    |
+                                  |   - 64-byte Cache-Aligned Sections    |
+                                  |   - Zero Heap Allocation on Startup   |
+                                  +---------------------------------------+
 ```
 
 ---
 
-## CLI Usage
+## Benchmark Results
 
-### 1. Build an Index from JSONL
-Create or provide a `.jsonl` document file (format: `{"id": 1, "title": "...", "text": "..."}`):
+Tested on **Simple English Wikipedia** (271,979 documents, 685.18 MB indexed corpus, 34.97M tokens, 834,149 unique terms):
+
+| Query Class | $p_{50}$ Latency | $p_{95}$ Latency | $p_{99}$ Latency | Throughput (QPS) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Prefix Autocomplete** | **26.5 µs** | 30.3 µs | 33.5 µs | **36,797 QPS** |
+| **Positional Phrase** | **502.2 µs** | 2,490.8 µs | 2,674.7 µs | **1,062 QPS** |
+| **1-Term BM25** | **821.7 µs** | 2,334.8 µs | 2,362.4 µs | **1,287 QPS** |
+| **3-Term Boolean AND** | **850.1 µs** | 2,007.0 µs | 2,168.9 µs | **961 QPS** |
+| **3-Term Scored OR (WAND)** | **963.7 µs** | 2,987.9 µs | 2,993.9 µs | **732 QPS** |
+| **Fuzzy Typo ($k=1$)** | **8.84 ms** | 10.39 ms | 11.31 ms | **110 QPS** |
+| **Fuzzy Typo ($k=2$)** | **7.70 ms** | 9.29 ms | 9.67 ms | **125 QPS** |
+
+### Key Profiling Highlights:
+- **Block-Max WAND**: Achieves **7.68× speedup** over exhaustive scoring ($925.0\ \mu\text{s}$ vs $7,376.3\ \mu\text{s}\ p_{50}$).
+- **Posting Decode**: Sustains **> 413 Million postings / second** across SIMD/bit-packed posting blocks.
+
+---
+
+## Architectural Comparison
+
+| Dimension | Needlefish | Apache Lucene | Tantivy | MeiliSearch |
+| :--- | :--- | :--- | :--- | :--- |
+| **Language** | C++20 | Java | Rust | Rust |
+| **Runtime Dependencies** | None (0 MB) | JVM | None | None |
+| **Substring Search** | Hand-crafted FM-Index (SA-IS + Wavelet) | Trigram | Trigram | Trigram |
+| **Fuzzy / Typo Search** | Schulz-Mihov DFA $\cap$ Flattened Trie | Levenshtein Automata | FST Automata | Levenshtein DFA |
+| **Ranking Pruning** | Block-Max WAND | Block-Max WAND | Block-Max WAND | Bucket Sorting |
+| **Index Format** | Single-file zero-copy mmap (`.idx`) | Segment Directory | Segment Directory | LMDB KV Store |
+
+---
+
+## Quickstart
+
+### 1. Build from Source
+
 ```bash
-# Build index with full-text + FM-Index substring indexing
-./build/debug/needlefish.exe index --input corpus.jsonl --output corpus.idx --enable-substring
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target needlefish_cli needlefish_c
 ```
 
-### 2. Launch the Web UI & REST API Server
+### 2. Index a JSONL Corpus
+
 ```bash
-./build/debug/needlefish.exe serve --index corpus.idx --port 8080 --web-dir web
-```
-Open `http://localhost:8080` in any browser to use the search UI.
-
-### 3. Search the Index via CLI
-```bash
-# Multi-term scored BM25 query with WAND pruning
-./build/debug/needlefish.exe search --index corpus.idx --query "information retrieval systems"
-
-# Exact positional phrase search
-./build/debug/needlefish.exe search --index corpus.idx --query '"succinct data structures"'
-
-# Fuzzy typo search (edit distance up to 2)
-./build/debug/needlefish.exe search --index corpus.idx --query "sukcinct~2"
-
-# Regular expression search
-./build/debug/needlefish.exe search --index corpus.idx --query "/C\+\+\d+/"
+# Ingest documents and produce memory-mapped .idx file
+./build/needlefish index --input corpus.jsonl --output corpus.idx --enable-fm
 ```
 
-### 4. Autocomplete & Suggestions
-```bash
-# Prefix autocomplete
-./build/debug/needlefish.exe suggest --index corpus.idx --query "infor"
+### 3. Query from the CLI
 
-# Fuzzy typo suggestions
-./build/debug/needlefish.exe suggest --index corpus.idx --query "sukcinct" --fuzzy
+```bash
+# Term search
+./build/needlefish search --index corpus.idx --query "information retrieval"
+
+# Exact phrase search
+./build/needlefish search --index corpus.idx --query "\"operating system\""
+
+# Fuzzy typo correction
+./build/needlefish search --index corpus.idx --query "relativty~1"
 ```
 
-### 5. Display Index Statistics
+### 4. Run HTTP REST API Server
+
 ```bash
-./build/debug/needlefish.exe stats --index corpus.idx
+./build/needlefish serve --index corpus.idx --port 8080 --static web/
+```
+
+Access the interactive web dashboard at `http://localhost:8080`.
+
+---
+
+## Programmatic APIs
+
+### C++20 Embedded API
+
+```cpp
+#include <needlefish.hpp>
+#include <iostream>
+
+int main() {
+    needlefish::IndexView index;
+    index.open("corpus.idx");
+
+    needlefish::QueryEvaluator eval(index);
+    auto results = eval.search("quantum computing", 10);
+
+    for (const auto& hit : results.hits) {
+        std::cout << "[" << hit.doc_id << "] " << index.doc_title(hit.doc_id)
+                  << " (Score: " << hit.score << ")\n";
+    }
+    return 0;
+}
+```
+
+### Python API (ctypes)
+
+```python
+from bindings.python.needlefish import NeedlefishIndex
+
+engine = NeedlefishIndex("corpus.idx")
+results = engine.search("quantum computing", top_k=5)
+
+for hit in results["hits"]:
+    print(f"[{hit['doc_id']}] {hit['title']} (Score: {hit['score']:.2f})")
+    print(f"    {hit['snippet']}")
 ```
 
 ---
 
-## 📁 Repository Structure
+## REST API Specification
 
+### 1. `GET /api/search?q=<query>&k=<top_k>`
+Executes ranked search with term, phrase, boolean, and fuzzy routing:
+```json
+{
+  "took_us": 472,
+  "total_estimate": 142,
+  "hits": [
+    {
+      "doc_id": 51828,
+      "score": 19.09,
+      "title": "Quantum computer",
+      "snippet": "...building block of <em>quantum</em> <em>computers</em>..."
+    }
+  ]
+}
 ```
-.
-├── CMakeLists.txt              # Root build configuration (C++20, strict warnings -Werror)
-├── CMakePresets.json           # Presets (debug, release, sanitize, tsan, bench)
-├── src/                        # Core search engine library (zero external dependencies)
-│   ├── bitvector/              # 512-bit superblock Rank/Select BitVector
-│   ├── wavelet/                # 8-level byte Wavelet Tree
-│   ├── sa/                     # SA-IS linear-time Suffix Array
-│   ├── fm/                     # FM-Index and Burrows-Wheeler Transform
-│   ├── util/                   # UTF-8 validator, Unicode tokenizer, Porter stemmer
-│   ├── invidx/                 # Posting lists, Frame-of-Reference (FOR), Radix Trie, Builder
-│   ├── store/                  # Memory-mapped zero-copy .idx file storage
-│   ├── automata/               # Non-backtracking Regex, Levenshtein DFA, Autocomplete
-│   └── rank/                   # BM25 scorer, Block-Max WAND, Query evaluator, Hybrid search
-├── cli/                        # Standalone CLI binary (index, search, suggest, stats)
-├── tests/                      # Unit & property test suites
-│   ├── unit/                   # Deterministic & boundary tests
-│   ├── property/               # Differential oracle property tests
-│   └── golden/                 # Official Porter 23,531-word test fixtures
-├── bench/                      # Google Benchmark suite
-└── docs/                       # Architecture specifications & benchmark tables
-    ├── design.md
-    └── benchmarks.md
+
+### 2. `GET /api/suggest?prefix=<prefix>&k=<count>`
+Returns instant search-as-you-type prefix completions:
+```json
+{
+  "prefix": "algo",
+  "suggestions": ["algorithm", "algorithmic", "algorithms"]
+}
+```
+
+### 3. `GET /api/stats`
+Returns index metadata and memory footprint:
+```json
+{
+  "total_docs": 271979,
+  "total_tokens": 34972108,
+  "avg_doc_len": 128.58,
+  "file_size_bytes": 718452104,
+  "has_fm_index": true
+}
 ```
 
 ---
 
-## 📜 License
-This project is licensed under the [MIT License](LICENSE).
+## Docker Deployment
+
+```bash
+docker build -t needlefish .
+docker run -p 8080:8080 -v $(pwd)/data:/data needlefish --index /data/corpus.idx
+```
+
+---
+
+## License
+MIT License. Created by [AFlyingP](https://github.com/AFlyingP).
