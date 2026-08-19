@@ -276,6 +276,49 @@ int cmd_stats(int argc, char* argv[]) {
     return 0;
 }
 
+#include "server/http_server.hpp"
+
+int cmd_serve(int argc, char* argv[]) {
+    std::string index_path;
+    std::string host = "127.0.0.1";
+    uint16_t port = 8080;
+    std::string web_dir = "web";
+
+    for (int i = 2; i < argc; ++i) {
+        std::string_view arg = argv[i];
+        if (arg == "--index" || arg == "-i") {
+            if (i + 1 < argc)
+                index_path = argv[++i];
+        } else if (arg == "--host" || arg == "-h") {
+            if (i + 1 < argc)
+                host = argv[++i];
+        } else if (arg == "--port" || arg == "-p") {
+            if (i + 1 < argc)
+                port = static_cast<uint16_t>(std::stoul(argv[++i]));
+        } else if (arg == "--web-dir" || arg == "-w") {
+            if (i + 1 < argc)
+                web_dir = argv[++i];
+        }
+    }
+
+    if (index_path.empty()) {
+        std::cerr << "Error: Missing required argument --index <index.idx>\n";
+        return 1;
+    }
+
+    if (!std::filesystem::exists(index_path)) {
+        std::cerr << "Error: Index file does not exist: " << index_path << "\n";
+        return 1;
+    }
+
+    IndexView index(index_path);
+    HttpServer server(index, host, port);
+    server.set_static_directory(web_dir);
+    server.start();
+
+    return 0;
+}
+
 int main(int argc, char* argv[]) {
     if (argc < 2) {
         print_usage();
@@ -291,6 +334,8 @@ int main(int argc, char* argv[]) {
         return cmd_suggest(argc, argv);
     } else if (cmd == "stats") {
         return cmd_stats(argc, argv);
+    } else if (cmd == "serve") {
+        return cmd_serve(argc, argv);
     } else if (cmd == "--help" || cmd == "-h" || cmd == "help") {
         print_usage();
         return 0;

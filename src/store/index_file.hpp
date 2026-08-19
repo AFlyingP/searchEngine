@@ -93,6 +93,7 @@ class IndexView {
     [[nodiscard]] std::span<const uint8_t> stored_fields_section() const noexcept {
         return stored_fields_span_;
     }
+    [[nodiscard]] size_t file_size() const noexcept { return mmap_.size(); }
 
   private:
     void parse_sections(std::span<const uint8_t> data);
