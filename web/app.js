@@ -16,12 +16,23 @@
   const docCount = document.getElementById('doc-count');
   const themeToggle = document.getElementById('theme-toggle');
   const themeIcon = document.getElementById('theme-icon');
+  const serverBtn = document.getElementById('server-btn');
+  const serverStatus = document.getElementById('server-status');
   const modeBtns = document.querySelectorAll('.mode-btn');
   const sampleChips = document.querySelectorAll('.chip');
 
   let currentMode = 'auto';
   let debounceTimer = null;
   let selectedSuggestionIndex = -1;
+  let customApiUrl = localStorage.getItem('needlefish_api_url') || '';
+
+  function getApiUrl(path) {
+    if (customApiUrl && customApiUrl.trim().length > 0) {
+      const base = customApiUrl.trim().replace(/\/+$/, '');
+      return `${base}${path}`;
+    }
+    return path;
+  }
 
   // Initialize
   function init() {
@@ -35,6 +46,24 @@
     searchInput.addEventListener('input', onSearchInput);
     searchInput.addEventListener('keydown', onSearchKeydown);
     clearBtn.addEventListener('click', clearSearch);
+
+    if (serverBtn) {
+      serverBtn.addEventListener('click', () => {
+        const current = customApiUrl || '';
+        const input = prompt(
+          'Enter live Needlefish C++ backend URL (e.g. https://useful-ericsson-exterior-howard.trycloudflare.com):\nLeave empty for default proxy.',
+          current
+        );
+        if (input !== null) {
+          customApiUrl = input.trim();
+          localStorage.setItem('needlefish_api_url', customApiUrl);
+          loadStats();
+          if (searchInput.value.trim().length > 0) {
+            executeSearch(searchInput.value.trim());
+          }
+        }
+      });
+    }
 
     // Global keyboard shortcut '/'
     window.addEventListener('keydown', (e) => {
@@ -156,12 +185,11 @@
   async function fetchSuggestions(prefix) {
     try {
       const isFuzzy = currentMode === 'fuzzy';
-      const res = await fetch(`/api/suggest?q=${encodeURIComponent(prefix)}&fuzzy=${isFuzzy}`);
+      const res = await fetch(getApiUrl(`/api/suggest?q=${encodeURIComponent(prefix)}&fuzzy=${isFuzzy}`));
       if (!res.ok) return;
       const data = await res.json();
       renderSuggestions(data.suggestions || []);
     } catch (err) {
-      // Offline fallback
       renderOfflineSuggestions(prefix);
     }
   }
@@ -202,7 +230,7 @@
     if (!query) return;
 
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&mode=${currentMode}&limit=15`);
+      const res = await fetch(getApiUrl(`/api/search?q=${encodeURIComponent(query)}&mode=${currentMode}&limit=15`));
       if (!res.ok) {
         const err = await res.json();
         renderError(err.error || 'Failed to fetch search results');
@@ -278,12 +306,14 @@
   // Load index statistics from /api/stats
   async function loadStats() {
     try {
-      const res = await fetch('/api/stats');
-      if (!res.ok) return;
+      const res = await fetch(getApiUrl('/api/stats'));
+      if (!res.ok) throw new Error('API offline');
       const stats = await res.json();
       docCount.textContent = `${stats.total_docs.toLocaleString()} docs (${(stats.file_size_bytes / (1024*1024)).toFixed(2)} MB)`;
+      if (serverStatus) serverStatus.textContent = 'API Live';
     } catch (e) {
       docCount.textContent = 'Demo Mode';
+      if (serverStatus) serverStatus.textContent = 'Set API';
     }
   }
 
