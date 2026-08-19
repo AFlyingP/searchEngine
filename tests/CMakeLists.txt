@@ -12,6 +12,9 @@ add_executable(test_needlefish_unit
     unit/test_golden_queries.cpp
     unit/test_automata.cpp
     unit/test_server.cpp
+    unit/test_concurrency.cpp
+    unit/test_edge_cases.cpp
+    integration/test_cli_e2e.cpp
 )
 target_link_libraries(test_needlefish_unit PRIVATE needlefish_core GTest::gtest_main)
 add_test(NAME test_unit COMMAND test_needlefish_unit)

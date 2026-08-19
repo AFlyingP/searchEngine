@@ -16,6 +16,7 @@ option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
 option(ENABLE_NATIVE_ARCH "Enable native architecture instructions" OFF)
 option(BUILD_TESTS "Build test suite" ON)
 option(BUILD_BENCHMARKS "Build benchmark suite" ON)
+option(BUILD_FUZZERS "Build fuzz targets" ON)
 
 # Core library
 add_library(needlefish_core
@@ -101,6 +102,11 @@ add_executable(needlefish_cli
 )
 target_link_libraries(needlefish_cli PRIVATE needlefish_core)
 set_target_properties(needlefish_cli PROPERTIES OUTPUT_NAME "needlefish")
+
+# Fuzzers
+if (BUILD_FUZZERS)
+    add_subdirectory(fuzz)
+endif()
 
 # Third-party dependencies for tests & benchmarks
 if (BUILD_TESTS OR BUILD_BENCHMARKS)
