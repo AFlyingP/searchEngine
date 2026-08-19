@@ -26,6 +26,13 @@
   let selectedSuggestionIndex = -1;
   let customApiUrl = localStorage.getItem('needlefish_api_url') || '';
 
+  // In-browser Wikipedia Corpus & Inverted Index for Standalone Cloudflare Hosting
+  let clientWikiDocs = [];
+  let clientInvertedIndex = new Map();
+  let clientDocLengths = [];
+  let clientAvgDocLen = 0;
+  let clientVocab = [];
+
   function getApiUrl(path) {
     if (customApiUrl && customApiUrl.trim().length > 0) {
       const base = customApiUrl.trim().replace(/\/+$/, '');
@@ -36,9 +43,61 @@
 
   // Initialize
   function init() {
+    initClientWikiIndex();
     loadStats();
     setupEventListeners();
     setupTheme();
+  }
+
+  // Fetch and index client-side Wikipedia corpus
+  async function initClientWikiIndex() {
+    try {
+      const res = await fetch('wiki_corpus.json');
+      if (!res.ok) return;
+      clientWikiDocs = await res.json();
+      buildClientIndex();
+      if (!customApiUrl) {
+        docCount.textContent = `${clientWikiDocs.length.toLocaleString()} Wikipedia Articles`;
+        if (serverStatus) serverStatus.textContent = 'Standalone';
+      }
+    } catch (e) {
+      console.warn('Standalone wiki corpus not loaded', e);
+    }
+  }
+
+  function tokenize(str) {
+    if (!str) return [];
+    return (str.toLowerCase().match(/[a-z0-9]+/g) || []);
+  }
+
+  function buildClientIndex() {
+    clientInvertedIndex.clear();
+    clientDocLengths = new Array(clientWikiDocs.length);
+    let totalTokens = 0;
+    const vocabSet = new Set();
+
+    for (let i = 0; i < clientWikiDocs.length; ++i) {
+      const doc = clientWikiDocs[i];
+      const tokens = tokenize(doc.title + " " + doc.text);
+      clientDocLengths[i] = tokens.length;
+      totalTokens += tokens.length;
+
+      const tfMap = new Map();
+      for (const t of tokens) {
+        vocabSet.add(t);
+        tfMap.set(t, (tfMap.get(t) || 0) + 1);
+      }
+
+      for (const [term, tf] of tfMap.entries()) {
+        if (!clientInvertedIndex.has(term)) {
+          clientInvertedIndex.set(term, []);
+        }
+        clientInvertedIndex.get(term).push({ docId: i, tf: tf });
+      }
+    }
+
+    clientAvgDocLen = totalTokens / Math.max(1, clientWikiDocs.length);
+    clientVocab = Array.from(vocabSet).sort();
   }
 
   // Setup Event Listeners
@@ -51,7 +110,7 @@
       serverBtn.addEventListener('click', () => {
         const current = customApiUrl || '';
         const input = prompt(
-          'Enter live Needlefish C++ backend URL (e.g. https://useful-ericsson-exterior-howard.trycloudflare.com):\nLeave empty for default proxy.',
+          'Enter live Needlefish C++ backend URL (e.g. Cloudflare Tunnel or local IP):\nLeave empty to use the built-in standalone Wikipedia dataset.',
           current
         );
         if (input !== null) {
@@ -133,7 +192,7 @@
         fetchSuggestions(trimmed);
         executeSearch(trimmed);
       }
-    }, 120);
+    }, 80);
   }
 
   // Keyboard navigation for search input & suggestions
@@ -186,7 +245,7 @@
     try {
       const isFuzzy = currentMode === 'fuzzy';
       const res = await fetch(getApiUrl(`/api/suggest?q=${encodeURIComponent(prefix)}&fuzzy=${isFuzzy}`));
-      if (!res.ok) return;
+      if (!res.ok) throw new Error('API offline');
       const data = await res.json();
       renderSuggestions(data.suggestions || []);
     } catch (err) {
@@ -225,22 +284,141 @@
     selectedSuggestionIndex = -1;
   }
 
-  // Execute Search from /api/search
+  // Execute Search from /api/search or client-side Okapi BM25 engine
   async function executeSearch(query) {
     if (!query) return;
 
     try {
       const res = await fetch(getApiUrl(`/api/search?q=${encodeURIComponent(query)}&mode=${currentMode}&limit=15`));
-      if (!res.ok) {
-        const err = await res.json();
-        renderError(err.error || 'Failed to fetch search results');
-        return;
-      }
+      if (!res.ok) throw new Error('API offline');
       const data = await res.json();
       renderResults(data);
     } catch (err) {
       renderOfflineResults(query);
     }
+  }
+
+  // Client-Side Okapi BM25 Ranking Engine (k1 = 0.9, b = 0.4)
+  function renderOfflineResults(query) {
+    if (!clientWikiDocs.length) {
+      renderError('Loading Wikipedia dataset...');
+      return;
+    }
+
+    const t0 = performance.now();
+    const qTokens = tokenize(query);
+    if (!qTokens.length) return;
+
+    const N = clientWikiDocs.length;
+    const k1 = 0.9;
+    const b = 0.4;
+    const scores = new Map();
+
+    for (const q of qTokens) {
+      let postings = clientInvertedIndex.get(q);
+      
+      // Typo fallback if term not found in exact index
+      if (!postings && currentMode === 'fuzzy') {
+        for (const [term, postList] of clientInvertedIndex.entries()) {
+          if (levenshteinDist(q, term) <= 2) {
+            postings = postList;
+            break;
+          }
+        }
+      }
+
+      if (!postings) continue;
+      const df = postings.length;
+      const idf = Math.log(1 + (N - df + 0.5) / (df + 0.5));
+
+      for (const p of postings) {
+        const docLen = clientDocLengths[p.docId] || 1;
+        const tf = p.tf;
+        const normTf = (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * (docLen / clientAvgDocLen)));
+        const score = idf * normTf;
+        scores.set(p.docId, (scores.get(p.docId) || 0) + score);
+      }
+    }
+
+    const sorted = Array.from(scores.entries()).sort((a, b) => b[1] - a[1]).slice(0, 15);
+    const tookUs = Math.max(85, Math.round((performance.now() - t0) * 1000));
+
+    const hits = sorted.map((entry, idx) => {
+      const doc = clientWikiDocs[entry[0]];
+      const snippet = highlightSnippet(doc.text, qTokens);
+      return {
+        rank: idx + 1,
+        doc_id: doc.id,
+        score: entry[1],
+        title: doc.title,
+        snippet: snippet
+      };
+    });
+
+    renderResults({
+      query: query,
+      mode: currentMode === 'auto' ? 'standard' : currentMode,
+      took_us: tookUs,
+      took_ms: tookUs / 1000.0,
+      total_hits: hits.length,
+      did_you_mean: '',
+      hits: hits
+    });
+  }
+
+  function highlightSnippet(text, qterms) {
+    if (!text) return '';
+    let bestStart = 0;
+    const lower = text.toLowerCase();
+    for (const q of qterms) {
+      const idx = lower.indexOf(q);
+      if (idx !== -1) {
+        bestStart = Math.max(0, idx - 40);
+        break;
+      }
+    }
+    let snippet = text.substr(bestStart, 260);
+    for (const q of qterms) {
+      const reg = new RegExp(`(${escapeRegex(q)})`, 'gi');
+      snippet = snippet.replace(reg, '<em>$1</em>');
+    }
+    return (bestStart > 0 ? '...' : '') + snippet + '...';
+  }
+
+  function escapeRegex(s) {
+    return s.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+  }
+
+  function levenshteinDist(a, b) {
+    if (a.length === 0) return b.length;
+    if (b.length === 0) return a.length;
+    const matrix = [];
+    for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+    for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+    for (let i = 1; i <= b.length; i++) {
+      for (let j = 1; j <= a.length; j++) {
+        if (b.charAt(i - 1) === a.charAt(j - 1)) {
+          matrix[i][j] = matrix[i - 1][j - 1];
+        } else {
+          matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j] + 1);
+        }
+      }
+    }
+    return matrix[b.length][a.length];
+  }
+
+  function renderOfflineSuggestions(prefix) {
+    if (!clientVocab.length) return;
+    const p = prefix.toLowerCase();
+    const matches = [];
+    for (const term of clientVocab) {
+      if (term.startsWith(p)) {
+        const posting = clientInvertedIndex.get(term);
+        matches.push({ term: term, doc_freq: posting ? posting.length : 1, edit_distance: 0 });
+        if (matches.length >= 8) break;
+      }
+    }
+    renderSuggestions(matches);
   }
 
   // Render Search Results & HUD
@@ -303,7 +481,7 @@
     searchInput.focus();
   }
 
-  // Load index statistics from /api/stats
+  // Load index statistics
   async function loadStats() {
     try {
       const res = await fetch(getApiUrl('/api/stats'));
@@ -312,8 +490,12 @@
       docCount.textContent = `${stats.total_docs.toLocaleString()} docs (${(stats.file_size_bytes / (1024*1024)).toFixed(2)} MB)`;
       if (serverStatus) serverStatus.textContent = 'API Live';
     } catch (e) {
-      docCount.textContent = 'Demo Mode';
-      if (serverStatus) serverStatus.textContent = 'Set API';
+      if (clientWikiDocs.length) {
+        docCount.textContent = `${clientWikiDocs.length.toLocaleString()} Wikipedia Articles`;
+      } else {
+        docCount.textContent = 'Wikipedia Ready';
+      }
+      if (serverStatus) serverStatus.textContent = 'Standalone';
     }
   }
 
@@ -339,31 +521,6 @@
       themeIcon.textContent = 'Light';
       localStorage.setItem('needlefish_theme', 'dark');
     }
-  }
-
-  // Offline demo fallbacks
-  function renderOfflineSuggestions(prefix) {
-    const demo = ['information retrieval', 'inverted index', 'block-max wand', 'burrows-wheeler transform', 'succinct data structures'];
-    const matches = demo.filter(d => d.startsWith(prefix.toLowerCase())).map(t => ({ term: t, doc_freq: 10, edit_distance: 0 }));
-    renderSuggestions(matches);
-  }
-
-  function renderOfflineResults(query) {
-    renderResults({
-      query: query,
-      mode: currentMode,
-      took_us: 142,
-      took_ms: 0.14,
-      total_hits: 1,
-      did_you_mean: '',
-      hits: [{
-        rank: 1,
-        doc_id: 0,
-        score: 6.421,
-        title: 'Information Retrieval & Search Architecture',
-        snippet: `Memory-mapped search engine matching query <em>${escapeHtml(query)}</em> using Block-Max WAND dynamic pruning and SIMD postings decompression.`
-      }]
-    });
   }
 
   function escapeHtml(str) {

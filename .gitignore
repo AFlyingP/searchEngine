@@ -30,3 +30,4 @@ plots/*.png
 # Large datasets & raw dumps (>100MB)
 *.bz2
 *.jsonl
+cloudflared.exe
