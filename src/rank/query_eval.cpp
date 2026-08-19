@@ -87,7 +87,8 @@ QueryResult QueryEvaluator::search_conjunction(std::span<const std::string> term
 
     const double avg_doc_len = index_.avg_doc_len();
 
-    while (readers[0].valid()) {
+    bool finished = false;
+    while (readers[0].valid() && !finished) {
         uint32_t candidate_doc = readers[0].doc_id();
         bool all_match = true;
 
@@ -95,10 +96,10 @@ QueryResult QueryEvaluator::search_conjunction(std::span<const std::string> term
             readers[i].reader.advance(candidate_doc);
             if (!readers[i].valid()) {
                 all_match = false;
+                finished = true;
                 break;
             }
             if (readers[i].doc_id() > candidate_doc) {
-                // Gallop readers[0] to new higher doc_id
                 readers[0].reader.advance(readers[i].doc_id());
                 all_match = false;
                 break;
@@ -118,6 +119,8 @@ QueryResult QueryEvaluator::search_conjunction(std::span<const std::string> term
             if (heap.size() > k) {
                 heap.pop();
             }
+        } else if (!finished && readers[0].valid() && readers[0].doc_id() == candidate_doc) {
+            readers[0].reader.next();
         }
     }
 
@@ -166,7 +169,8 @@ QueryResult QueryEvaluator::search_phrase(std::span<const std::string> terms, si
     const double avg_doc_len = index_.avg_doc_len();
 
     // Iterate across candidate matching docs
-    while (readers[0].valid()) {
+    bool finished = false;
+    while (readers[0].valid() && !finished) {
         uint32_t candidate_doc = readers[0].doc_id();
         bool all_match = true;
 
@@ -174,6 +178,7 @@ QueryResult QueryEvaluator::search_phrase(std::span<const std::string> terms, si
             readers[i].reader.advance(candidate_doc);
             if (!readers[i].valid()) {
                 all_match = false;
+                finished = true;
                 break;
             }
             if (readers[i].doc_id() > candidate_doc) {
@@ -225,6 +230,8 @@ QueryResult QueryEvaluator::search_phrase(std::span<const std::string> terms, si
             for (auto& r : readers) {
                 r.reader.next();
             }
+        } else if (!finished && readers[0].valid() && readers[0].doc_id() == candidate_doc) {
+            readers[0].reader.next();
         }
     }
 

@@ -117,7 +117,8 @@ std::vector<SearchHit> BlockMaxWAND::top_k_naive_disjunction(std::vector<ScoredT
         return {};
     }
 
-    std::map<uint32_t, float> doc_scores;
+    std::unordered_map<uint32_t, float> doc_scores;
+    doc_scores.reserve(65536);
     const double avg_doc_len = index.avg_doc_len();
 
     for (auto& r : readers) {
