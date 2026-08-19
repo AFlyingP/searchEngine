@@ -23,14 +23,21 @@
 #pragma comment(lib, "ws2_32.lib")
 #endif
 using socket_t = SOCKET;
+using recv_len_t = int;
+using send_len_t = int;
+using sock_ssize_t = int;
 constexpr socket_t INVALID_SOCK = INVALID_SOCKET;
 constexpr int SOCK_ERR = SOCKET_ERROR;
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 using socket_t = int;
+using recv_len_t = size_t;
+using send_len_t = size_t;
+using sock_ssize_t = ssize_t;
 constexpr socket_t INVALID_SOCK = -1;
 constexpr int SOCK_ERR = -1;
 #endif
@@ -525,7 +532,8 @@ void HttpServer::start() {
 #endif
 
         std::array<char, 4096> buffer{};
-        int bytes_read = recv(client_fd, buffer.data(), static_cast<int>(buffer.size() - 1), 0);
+        sock_ssize_t bytes_read =
+            recv(client_fd, buffer.data(), static_cast<recv_len_t>(buffer.size() - 1), 0);
         if (bytes_read > 0) {
             buffer[static_cast<size_t>(bytes_read)] = '\0';
             HttpRequest req =
@@ -534,8 +542,8 @@ void HttpServer::start() {
             std::string raw_resp = resp.to_http_string();
             size_t total_sent = 0;
             while (total_sent < raw_resp.size()) {
-                int sent = send(client_fd, raw_resp.data() + total_sent,
-                                static_cast<int>(raw_resp.size() - total_sent), 0);
+                sock_ssize_t sent = send(client_fd, raw_resp.data() + total_sent,
+                                         static_cast<send_len_t>(raw_resp.size() - total_sent), 0);
                 if (sent <= 0)
                     break;
                 total_sent += static_cast<size_t>(sent);
