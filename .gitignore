@@ -1,6 +1,7 @@
 # Current local files / folders
 .agents/
 spec.md
+
 # Build directories
 build/
 bin/
@@ -8,6 +9,7 @@ lib/
 out/
 .cache/
 compile_commands.json
+
 # IDEs and editors
 .vscode/
 .idea/
@@ -15,6 +17,7 @@ compile_commands.json
 *.swo
 *~
 .DS_Store
+
 # Benchmark corpora & index artifacts
 bench/corpora/
 bench/data/
@@ -23,3 +26,7 @@ bench/data/
 *.profdata
 coverage/
 plots/*.png
+
+# Large datasets & raw dumps (>100MB)
+*.bz2
+*.jsonl
