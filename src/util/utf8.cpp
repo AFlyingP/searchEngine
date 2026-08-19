@@ -35,7 +35,7 @@ std::vector<char32_t> Utf8Decoder::decode(std::string_view utf8_str) {
                 i += 1;
                 continue;
             }
-            const char32_t cp = ((b0 & 0x1F) << 6) | (b1 & 0x3F);
+            const char32_t cp = static_cast<char32_t>(((b0 & 0x1F) << 6) | (b1 & 0x3F));
             result.push_back(cp);
             i += 2;
         } else if ((b0 & 0xF0) == 0xE0) {
@@ -51,7 +51,8 @@ std::vector<char32_t> Utf8Decoder::decode(std::string_view utf8_str) {
                 i += 1;
                 continue;
             }
-            const char32_t cp = ((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F);
+            const char32_t cp =
+                static_cast<char32_t>(((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F));
             // Check surrogates (0xD800 - 0xDFFF) and overlong (< 0x800)
             if (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF)) {
                 result.push_back(REPLACEMENT_CHAR);
@@ -73,8 +74,8 @@ std::vector<char32_t> Utf8Decoder::decode(std::string_view utf8_str) {
                 i += 1;
                 continue;
             }
-            const char32_t cp =
-                ((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F);
+            const char32_t cp = static_cast<char32_t>(
+                ((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F));
             if (cp < 0x10000 || cp > 0x10FFFF) {
                 result.push_back(REPLACEMENT_CHAR);
             } else {
