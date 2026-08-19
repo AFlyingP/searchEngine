@@ -1,3 +1,5 @@
 name = "needlepig"
-pages_build_output_dir = "./web"
 compatibility_date = "2026-08-19"
+
+[assets]
+directory = "./web"
