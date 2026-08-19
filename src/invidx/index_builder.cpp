@@ -276,6 +276,16 @@ void IndexBuilder::write_index(const std::filesystem::path& output_idx_path) {
                                         {SectionId::Postings, postings_buf},
                                         {SectionId::Positions, positions_buf}};
 
+    std::vector<uint8_t> fm_index_buf;
+    if (enable_fm_index_ && !stored_fields_.empty()) {
+        FMIndex fm_idx(stored_fields_);
+        std::stringstream fm_ss;
+        fm_idx.serialize(fm_ss);
+        const std::string fm_str = fm_ss.str();
+        fm_index_buf.assign(fm_str.begin(), fm_str.end());
+        sec_defs.push_back({SectionId::FmIndex, fm_index_buf});
+    }
+
     const uint32_t num_sections = static_cast<uint32_t>(sec_defs.size());
     const size_t header_and_table_size = sizeof(IndexHeader) + num_sections * sizeof(SectionEntry);
 

@@ -142,7 +142,34 @@ All sections are strictly 64-byte aligned for zero-copy direct mapping:
 
 ---
 
-## 3. Directory Layout & Module Organization
+## 3. Automata & Substring Search Engine
+
+### 3.1 Regular Expression Engine (`needlefish::Regex`)
+- **AST Parser**: Recursive-descent parser for literals, wildcards `.`, character classes `[a-z]`, `[^0-9]`, escapes `\d`, `\w`, `\s`, repetitions `*`, `+`, `?`, and quantifiers `{n,m}`.
+- **Thompson NFA Construction**: Converts AST into non-deterministic state graph with $\epsilon$-transitions.
+- **On-the-Fly Powerset DFA**: Byte-level transition caching with a 256-entry transition table per state.
+- **Guaranteed $O(n)$ Runtime**: Deterministic state transitions ensure linear-time scanning with zero catastrophic backtracking.
+
+### 3.2 Universal Levenshtein Automata (`needlefish::LevenshteinAutomaton`)
+- **Parametric State Representation**: Schulz & Mihov (2002) state vectors over prefix edit distances for $k \in \{1, 2\}$.
+- **Radix Trie Lockstep Traversal**: Traverses `RadixTrie` nodes in lockstep with DFA state transitions, pruning non-matching subtrees immediately.
+- **Latency**: Intersects 50,000+ terms in **< 3 ms**.
+
+### 3.3 Autocomplete & Suggestion Engine (`needlefish::AutocompleteEngine`)
+- **Prefix Suggestions**: Instant search-as-you-type prefix completions ranked by document frequency.
+- **Fuzzy Corrections**: Typo suggestions with distance-weighted frequency scoring.
+- **"Did you mean?"**: Automatic spell-check corrections for out-of-vocabulary terms.
+
+### 3.4 Hybrid Search Engine (`needlefish::HybridSearchEngine`)
+- **Intelligent Query Routing**:
+  - Regular expressions `/pattern/` $\to$ `needlefish::Regex` text scanner.
+  - Substring / Infix matching $\to$ `needlefish::FMIndex` locate queries.
+  - Typo queries `term~k` $\to$ Levenshtein Automaton term expansion $\to$ Block-Max WAND.
+  - Standard queries $\to$ Okapi BM25 with Block-Max WAND dynamic pruning.
+
+---
+
+## 4. Directory Layout & Module Organization
 
 ```
 /
@@ -161,8 +188,9 @@ All sections are strictly 64-byte aligned for zero-copy direct mapping:
 │   ├── util/                   # UTF-8 validator, Unicode tokenizer, Porter stemmer
 │   ├── invidx/                 # Posting lists, Frame-of-Reference (FOR), Radix Trie, Index builder
 │   ├── store/                  # Zero-copy memory mapped .idx file format
-│   └── rank/                   # BM25 scorer, Block-Max WAND, Query evaluator, Snippets
-├── cli/                        # CLI tool (index, search, stats)
+│   ├── automata/               # Non-backtracking Regex, Levenshtein DFA, Autocomplete
+│   └── rank/                   # BM25 scorer, Block-Max WAND, Query evaluator, Hybrid search
+├── cli/                        # CLI tool (index, search, suggest, stats)
 ├── tests/                      # Unit & property test suites
 │   ├── unit/                   # Deterministic & boundary tests
 │   └── property/               # Exhaustive differential oracle property tests

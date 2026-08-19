@@ -8,6 +8,7 @@
 #include <string_view>
 #include <vector>
 
+#include "fm/fm_index.hpp"
 #include "invidx/postings.hpp"
 #include "invidx/radix_trie.hpp"
 #include "store/mmap.hpp"
@@ -80,6 +81,9 @@ class IndexView {
     [[nodiscard]] const RadixTrie& term_dict() const noexcept { return trie_; }
     [[nodiscard]] PostingListReader get_posting_reader(const TermPayload& payload) const;
 
+    [[nodiscard]] const FMIndex* fm_index() const noexcept { return fm_index_.get(); }
+    [[nodiscard]] bool has_fm_index() const noexcept { return fm_index_ != nullptr; }
+
     [[nodiscard]] std::span<const uint8_t> postings_section() const noexcept {
         return postings_span_;
     }
@@ -100,6 +104,7 @@ class IndexView {
     std::span<const uint8_t> postings_span_{};
     std::span<const uint8_t> positions_span_{};
     RadixTrie trie_{};
+    std::unique_ptr<FMIndex> fm_index_{};
 };
 
 }  // namespace needlefish

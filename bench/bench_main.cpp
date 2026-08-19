@@ -175,6 +175,53 @@ static void BM_Posting_Decode_SIMD(benchmark::State& state) {
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) *
                             static_cast<int64_t>(num_blocks * 128));
 }
-BENCHMARK(BM_Posting_Decode_SIMD);
+#include "automata/levenshtein.hpp"
+#include "automata/regex.hpp"
+#include "invidx/radix_trie.hpp"
+
+// 7. Regex Linear-Time Matching Benchmark
+static void BM_Regex_Match(benchmark::State& state) {
+    const size_t text_len = 100000;
+    std::string text(text_len, 'a');
+    for (size_t i = 1000; i < text_len; i += 2000) {
+        text[i] = 'b';
+        text[i + 1] = 'c';
+    }
+
+    Regex r("a*b+c");
+
+    for (auto _ : state) {
+        auto matches = r.find_all(text);
+        benchmark::DoNotOptimize(matches);
+    }
+    state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
+                            static_cast<int64_t>(text_len));
+}
+BENCHMARK(BM_Regex_Match);
+
+// 8. Levenshtein Trie Lockstep Intersection Benchmark (50,000 terms)
+static void BM_Levenshtein_Trie_Intersect(benchmark::State& state) {
+    RadixTrie trie;
+    std::mt19937 rng(42);
+    const std::string alphabet = "abcdefghijklmnopqrstuvwxyz";
+
+    for (uint32_t i = 0; i < 50000; ++i) {
+        const size_t len = 5 + (rng() % 10);
+        std::string word;
+        for (size_t j = 0; j < len; ++j) {
+            word += alphabet[rng() % alphabet.size()];
+        }
+        trie.insert(word, TermPayload{.term_id = i, .doc_freq = 1 + (rng() % 100)});
+    }
+
+    LevenshteinAutomaton dfa("algorithm", 2);
+
+    for (auto _ : state) {
+        auto matches = dfa.match_trie(trie, 20);
+        benchmark::DoNotOptimize(matches);
+    }
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_Levenshtein_Trie_Intersect);
 
 BENCHMARK_MAIN();

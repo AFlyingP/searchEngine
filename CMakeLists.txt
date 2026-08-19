@@ -35,6 +35,10 @@ add_library(needlefish_core
     src/rank/wand.cpp
     src/rank/query_eval.cpp
     src/rank/snippet.cpp
+    src/rank/hybrid_search.cpp
+    src/automata/regex.cpp
+    src/automata/levenshtein.cpp
+    src/automata/autocomplete.cpp
 )
 
 target_include_directories(needlefish_core

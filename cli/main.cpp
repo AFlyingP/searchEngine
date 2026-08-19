@@ -6,7 +6,9 @@
 #include <string_view>
 #include <vector>
 
+#include "automata/autocomplete.hpp"
 #include "invidx/index_builder.hpp"
+#include "rank/hybrid_search.hpp"
 #include "rank/query_eval.hpp"
 #include "rank/snippet.hpp"
 #include "store/index_file.hpp"
@@ -14,13 +16,18 @@
 using namespace needlefish;
 
 void print_usage() {
-    std::cout << "needlefish v0.2.0 - high-performance full-text search engine\n\n";
+    std::cout << "needlefish v0.3.0 - high-performance full-text search engine\n\n";
     std::cout << "Usage: needlefish <command> [options]\n\n";
     std::cout << "Commands:\n";
     std::cout << "  index    Build an index from a JSONL file\n";
-    std::cout << "           Options: --input <file.jsonl> --output <index.idx>\n\n";
+    std::cout
+        << "           Options: --input <file.jsonl> --output <index.idx> [--enable-substring]\n\n";
     std::cout << "  search   Search an existing index\n";
-    std::cout << "           Options: --index <index.idx> --query \"<query>\" [--k <num>]\n\n";
+    std::cout << "           Options: --index <index.idx> --query \"<query>\" [--k <num>] [--fuzzy "
+                 "<dist>] [--regex] [--substring]\n\n";
+    std::cout << "  suggest  Autocomplete and fuzzy suggest terms from the index\n";
+    std::cout << "           Options: --index <index.idx> --query \"<prefix|term>\" [--fuzzy] "
+                 "[--max-dist <num>]\n\n";
     std::cout << "  stats    Display statistics for an index file\n";
     std::cout << "           Options: --index <index.idx>\n";
 }
@@ -28,13 +35,18 @@ void print_usage() {
 int cmd_index(int argc, char* argv[]) {
     std::string input_path;
     std::string output_path = "corpus.idx";
+    bool enable_substring = false;
 
     for (int i = 2; i < argc; ++i) {
         std::string_view arg = argv[i];
         if (arg == "--input" || arg == "-i") {
-            if (i + 1 < argc) input_path = argv[++i];
+            if (i + 1 < argc)
+                input_path = argv[++i];
         } else if (arg == "--output" || arg == "-o") {
-            if (i + 1 < argc) output_path = argv[++i];
+            if (i + 1 < argc)
+                output_path = argv[++i];
+        } else if (arg == "--enable-substring" || arg == "-s") {
+            enable_substring = true;
         }
     }
 
@@ -48,10 +60,12 @@ int cmd_index(int argc, char* argv[]) {
         return 1;
     }
 
-    std::cout << "Indexing: " << input_path << " -> " << output_path << "\n";
+    std::cout << "Indexing: " << input_path << " -> " << output_path
+              << (enable_substring ? " (with FM-Index substring support)" : "") << "\n";
     const auto t0 = std::chrono::high_resolution_clock::now();
 
     IndexBuilder builder;
+    builder.set_enable_fm_index(enable_substring);
     size_t docs_indexed = builder.index_jsonl_file(input_path);
     builder.write_index(output_path);
 
@@ -62,9 +76,10 @@ int cmd_index(int argc, char* argv[]) {
     const auto file_size = std::filesystem::file_size(output_path);
 
     std::cout << "Successfully indexed " << docs_indexed << " documents (" << builder.total_terms()
-              << " unique terms) in " << std::fixed << std::setprecision(2) << elapsed_ms << " ms\n";
-    std::cout << "Output index file size: " << file_size << " bytes ("
-              << std::fixed << std::setprecision(2) << (file_size / 1024.0 / 1024.0) << " MB)\n";
+              << " unique terms) in " << std::fixed << std::setprecision(2) << elapsed_ms
+              << " ms\n";
+    std::cout << "Output index file size: " << file_size << " bytes (" << std::fixed
+              << std::setprecision(2) << (file_size / 1024.0 / 1024.0) << " MB)\n";
     return 0;
 }
 
@@ -72,15 +87,30 @@ int cmd_search(int argc, char* argv[]) {
     std::string index_path;
     std::string query_str;
     size_t top_k = 10;
+    size_t fuzzy_dist = 0;
+    bool force_regex = false;
+    bool force_substring = false;
 
     for (int i = 2; i < argc; ++i) {
         std::string_view arg = argv[i];
         if (arg == "--index" || arg == "-i") {
-            if (i + 1 < argc) index_path = argv[++i];
+            if (i + 1 < argc)
+                index_path = argv[++i];
         } else if (arg == "--query" || arg == "-q") {
-            if (i + 1 < argc) query_str = argv[++i];
+            if (i + 1 < argc)
+                query_str = argv[++i];
         } else if (arg == "--k" || arg == "-k") {
-            if (i + 1 < argc) top_k = std::stoul(argv[++i]);
+            if (i + 1 < argc)
+                top_k = std::stoul(argv[++i]);
+        } else if (arg == "--fuzzy" || arg == "-f") {
+            fuzzy_dist = 2;
+            if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') {
+                fuzzy_dist = std::stoul(argv[++i]);
+            }
+        } else if (arg == "--regex" || arg == "-r") {
+            force_regex = true;
+        } else if (arg == "--substring" || arg == "-s") {
+            force_substring = true;
         }
     }
 
@@ -99,16 +129,28 @@ int cmd_search(int argc, char* argv[]) {
     }
 
     IndexView index(index_path);
-    QueryEvaluator evaluator(index);
+    HybridSearchEngine hybrid(index);
     SnippetGenerator snippet_gen;
 
-    const auto result = evaluator.search(query_str, top_k);
+    HybridSearchResult result;
+    if (force_regex) {
+        result = hybrid.search_regex(query_str, top_k);
+    } else if (force_substring) {
+        result = hybrid.search_substring(query_str, top_k);
+    } else if (fuzzy_dist > 0) {
+        result = hybrid.search_fuzzy(query_str, fuzzy_dist, top_k);
+    } else {
+        result = hybrid.search(query_str, top_k);
+    }
 
     std::cout << "Search results for: \"" << query_str << "\" (" << result.hits.size()
               << " matches in " << result.took_us << " µs):\n\n";
 
     if (result.hits.empty()) {
         std::cout << "  No documents matched the query.\n";
+        if (!result.correction_suggestion.empty()) {
+            std::cout << "  Did you mean: \"" << result.correction_suggestion << "\"?\n";
+        }
         return 0;
     }
 
@@ -134,13 +176,76 @@ int cmd_search(int argc, char* argv[]) {
     return 0;
 }
 
+int cmd_suggest(int argc, char* argv[]) {
+    std::string index_path;
+    std::string query_str;
+    bool is_fuzzy = false;
+    size_t max_dist = 2;
+    size_t top_k = 10;
+
+    for (int i = 2; i < argc; ++i) {
+        std::string_view arg = argv[i];
+        if (arg == "--index" || arg == "-i") {
+            if (i + 1 < argc)
+                index_path = argv[++i];
+        } else if (arg == "--query" || arg == "-q") {
+            if (i + 1 < argc)
+                query_str = argv[++i];
+        } else if (arg == "--fuzzy" || arg == "-f") {
+            is_fuzzy = true;
+        } else if (arg == "--max-dist" || arg == "-d") {
+            if (i + 1 < argc)
+                max_dist = std::stoul(argv[++i]);
+        } else if (arg == "--k" || arg == "-k") {
+            if (i + 1 < argc)
+                top_k = std::stoul(argv[++i]);
+        }
+    }
+
+    if (index_path.empty()) {
+        std::cerr << "Error: Missing required argument --index <index.idx>\n";
+        return 1;
+    }
+    if (query_str.empty()) {
+        std::cerr << "Error: Missing required argument --query \"<prefix>\"\n";
+        return 1;
+    }
+
+    if (!std::filesystem::exists(index_path)) {
+        std::cerr << "Error: Index file does not exist: " << index_path << "\n";
+        return 1;
+    }
+
+    IndexView index(index_path);
+    AutocompleteEngine autocomplete(index);
+
+    std::vector<Suggestion> suggestions;
+    if (is_fuzzy) {
+        suggestions = autocomplete.fuzzy_suggest(query_str, max_dist, top_k);
+    } else {
+        suggestions = autocomplete.prefix_suggest(query_str, top_k);
+    }
+
+    std::cout << "Suggestions for \"" << query_str << "\" (" << (is_fuzzy ? "fuzzy" : "prefix")
+              << ", " << suggestions.size() << " results):\n\n";
+
+    for (size_t i = 0; i < suggestions.size(); ++i) {
+        const auto& s = suggestions[i];
+        std::cout << "  [" << (i + 1) << "] " << s.text << " (doc_freq: " << s.doc_freq
+                  << ", edit_dist: " << s.edit_distance << ")\n";
+    }
+
+    return 0;
+}
+
 int cmd_stats(int argc, char* argv[]) {
     std::string index_path;
 
     for (int i = 2; i < argc; ++i) {
         std::string_view arg = argv[i];
         if (arg == "--index" || arg == "-i") {
-            if (i + 1 < argc) index_path = argv[++i];
+            if (i + 1 < argc)
+                index_path = argv[++i];
         }
     }
 
@@ -165,6 +270,7 @@ int cmd_stats(int argc, char* argv[]) {
               << stats.avg_doc_len << " tokens\n";
     std::cout << "  Unique Terms in Trie:  " << index.term_dict().num_terms() << "\n";
     std::cout << "  Trie Flat Nodes:       " << index.term_dict().num_nodes() << "\n";
+    std::cout << "  Has FM-Index Substring:" << (index.has_fm_index() ? " Yes" : " No") << "\n";
     std::cout << "  Total Index File Size: " << file_size << " bytes ("
               << (file_size / 1024.0 / 1024.0) << " MB)\n";
     return 0;
@@ -181,6 +287,8 @@ int main(int argc, char* argv[]) {
         return cmd_index(argc, argv);
     } else if (cmd == "search") {
         return cmd_search(argc, argv);
+    } else if (cmd == "suggest") {
+        return cmd_suggest(argc, argv);
     } else if (cmd == "stats") {
         return cmd_stats(argc, argv);
     } else if (cmd == "--help" || cmd == "-h" || cmd == "help") {

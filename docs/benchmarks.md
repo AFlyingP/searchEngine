@@ -22,6 +22,8 @@ This document outlines the microbenchmarks and throughput performance of **needl
 | **`BM_BitVector_Select1`** | **49.7 ns** | **20.1 Million ops/s** | Binary search + BMI2 `_pdep_u64` bit scan select |
 | **`BM_FMIndex_BackwardSearch_10Char`** | **921 ns** | **1.086 Million queries/s** | 10-character exact backward search count |
 | **`BM_SAIS_Construction_10MB`** | **1026 ms** | **9.70 MB/s** | Linear-time induced sorting suffix array construction |
+| **`BM_Regex_Match`** | **1.24 ms / 100KB** | **76.59 MB/s** | Non-backtracking Thompson NFA $\to$ Powerset DFA regex scan |
+| **`BM_Levenshtein_Trie_Intersect`** | **2.71 ms** | **368 queries/s** | Universal Levenshtein DFA lockstep traversal over 50,000-term Radix Trie |
 | **`Index Load Latency`** | **< 10 ms** | **Instantaneous** | Memory-mapped zero-copy section binding |
 
 ---

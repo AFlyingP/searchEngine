@@ -45,6 +45,8 @@ class IndexBuilder {
      * @brief Build and write the final unified .idx file to disk.
      */
     void write_index(const std::filesystem::path& output_idx_path);
+    void set_enable_fm_index(bool enable) noexcept { enable_fm_index_ = enable; }
+    [[nodiscard]] bool is_fm_index_enabled() const noexcept { return enable_fm_index_; }
 
     [[nodiscard]] size_t total_docs() const noexcept { return doc_metadata_.size(); }
     [[nodiscard]] size_t total_terms() const noexcept { return term_postings_.size(); }
@@ -54,6 +56,7 @@ class IndexBuilder {
 
     size_t memory_budget_{DEFAULT_MEMORY_BUDGET};
     size_t estimated_memory_usage_{0};
+    bool enable_fm_index_{false};
 
     Analyzer analyzer_{true, true};
 

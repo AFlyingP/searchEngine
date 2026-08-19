@@ -41,6 +41,12 @@ It combines state-of-the-art information retrieval algorithms (Okapi BM25, Block
   * **Okapi BM25**: Scored ranking with configurable $k_1 = 0.9, b = 0.4$.
   * **Block-Max WAND**: Dynamic pruning skips non-competitive document blocks without decoding posting deltas.
   * **Boolean & Phrase Search**: Galloping intersection (`AND`), scored disjunction (`OR`), and consecutive token positions (`"phrase"`).
+* **Automata & Substring Engine**:
+  * **Non-Backtracking Regex**: Linear-time $O(n)$ matching via on-the-fly Powerset DFA with a 256-entry transition table per state.
+  * **Universal Levenshtein DFA**: Schulz & Mihov (2002) parametric automaton intersecting the contiguous Radix Trie in lockstep ($< 3 \text{ ms}$ over 50,000+ terms).
+  * **Search-As-You-Type Autocomplete**: Fast prefix completions and distance-weighted typo suggestions.
+* **Hybrid Query Engine**:
+  * Seamlessly routes natural language queries to BM25/WAND, typo queries (`term~2`) to Levenshtein automata, regex (`/pattern/`) to the DFA scanner, and raw substrings to the FM-Index.
 * **Zero-Copy Memory-Mapped Storage**:
   * Single `.idx` binary file format with 64-byte aligned sections and CRC-32 integrity validation.
   * Instantaneous load time ($< 10 \text{ ms}$) via Windows `CreateFileMapping` / POSIX `mmap`.
@@ -66,10 +72,10 @@ cmake --build --preset debug --target test_needlefish_unit
 
 ### Run Tests
 ```bash
-# Run unit & golden tests (including official 23,531-word Porter golden suite)
+# Run unit & golden tests (39 tests including 23,531-word Porter golden suite)
 ./build/debug/tests/test_needlefish_unit.exe
 
-# Run differential property tests (1,000 WAND vs naive ranking oracle trials)
+# Run differential property tests (5,000 Levenshtein DFA vs DP matrix trials & 1,000 WAND trials)
 ./build/debug/tests/test_needlefish_property.exe
 ```
 
@@ -80,7 +86,8 @@ cmake --build --preset debug --target test_needlefish_unit
 ### 1. Build an Index from JSONL
 Create or provide a `.jsonl` document file (format: `{"id": 1, "title": "...", "text": "..."}`):
 ```bash
-./build/debug/needlefish.exe index --input corpus.jsonl --output corpus.idx
+# Build index with full-text + FM-Index substring indexing
+./build/debug/needlefish.exe index --input corpus.jsonl --output corpus.idx --enable-substring
 ```
 
 ### 2. Search the Index
@@ -90,9 +97,24 @@ Create or provide a `.jsonl` document file (format: `{"id": 1, "title": "...", "
 
 # Exact positional phrase search
 ./build/debug/needlefish.exe search --index corpus.idx --query '"succinct data structures"'
+
+# Fuzzy typo search (edit distance up to 2)
+./build/debug/needlefish.exe search --index corpus.idx --query "sukcinct~2"
+
+# Regular expression search
+./build/debug/needlefish.exe search --index corpus.idx --query "/C\+\+\d+/"
 ```
 
-### 3. Display Index Statistics
+### 3. Autocomplete & Suggestions
+```bash
+# Prefix autocomplete
+./build/debug/needlefish.exe suggest --index corpus.idx --query "infor"
+
+# Fuzzy typo suggestions
+./build/debug/needlefish.exe suggest --index corpus.idx --query "sukcinct" --fuzzy
+```
+
+### 4. Display Index Statistics
 ```bash
 ./build/debug/needlefish.exe stats --index corpus.idx
 ```
@@ -113,8 +135,9 @@ Create or provide a `.jsonl` document file (format: `{"id": 1, "title": "...", "
 │   ├── util/                   # UTF-8 validator, Unicode tokenizer, Porter stemmer
 │   ├── invidx/                 # Posting lists, Frame-of-Reference (FOR), Radix Trie, Builder
 │   ├── store/                  # Memory-mapped zero-copy .idx file storage
-│   └── rank/                   # BM25 scorer, Block-Max WAND, Query evaluator, Snippets
-├── cli/                        # Standalone CLI binary (index, search, stats)
+│   ├── automata/               # Non-backtracking Regex, Levenshtein DFA, Autocomplete
+│   └── rank/                   # BM25 scorer, Block-Max WAND, Query evaluator, Hybrid search
+├── cli/                        # Standalone CLI binary (index, search, suggest, stats)
 ├── tests/                      # Unit & property test suites
 │   ├── unit/                   # Deterministic & boundary tests
 │   ├── property/               # Differential oracle property tests

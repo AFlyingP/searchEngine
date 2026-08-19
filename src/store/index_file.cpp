@@ -103,6 +103,13 @@ void IndexView::parse_sections(std::span<const uint8_t> data) {
             case SectionId::Positions:
                 positions_span_ = sec_data;
                 break;
+            case SectionId::FmIndex: {
+                std::string str_view(reinterpret_cast<const char*>(sec_data.data()),
+                                     sec_data.size());
+                std::stringstream ss(str_view);
+                fm_index_ = std::make_unique<FMIndex>(FMIndex::deserialize(ss));
+                break;
+            }
             default:
                 break;
         }
