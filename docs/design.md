@@ -1,10 +1,10 @@
-# Needlefish System Architecture & Design Document
+# Needlefish Architecture & Design Specification
 
-`needlefish` is a high-performance full-text + substring search engine implemented in modern C++20 from scratch with zero third-party core library dependencies.
+**needlefish** is a high-performance full-text search and succinct indexing engine written in modern C++20 with zero external dependencies in the core library.
 
 ---
 
-## 1. Succinct Data Structures (Phase 1)
+## 1. Succinct Data Structures
 
 ### 1.1 Rank/Select BitVector (`needlefish::RankSelectBitVector`)
 - **Underlying Storage**: 64-bit unsigned words (`uint64_t`).
@@ -14,7 +14,7 @@
     - `uint64_t superblock_rank`: Cumulative 1-bit count before the superblock.
     - `uint16_t subblock_ranks[8]`: Relative 1-bit count within the 8 sub-blocks (words).
 - **Time Complexity**:
-  - `rank1(i)`: $O(1)$ time ($\approx 1.99 \text{ ns}$ hot, 1 superblock lookup + 1 subblock lookup + 1 popcount).
+  - `rank1(i)`: $O(1)$ time ($\approx 1.91 \text{ ns}$, 1 superblock lookup + 1 subblock lookup + 1 popcount).
   - `rank0(i)`: $O(1)$ time ($i - \text{rank1}(i)$).
   - `select1(k)`: $O(\log(N / 512))$ time (binary search over superblocks + sub-block scan + BMI2 `_pdep_u64` / binary search).
   - `select0(k)`: $O(\log(N / 512))$ time.
@@ -30,7 +30,7 @@
 
 ### 1.3 SA-IS Linear-Time Suffix Array (`needlefish::SaisBuilder`)
 - **Algorithm**: Induced sorting (Nong, Zhang, Chan 2009).
-- **Phases**:
+- **Stages**:
   1. $S/L$ type classification in $O(n)$ right-to-left scan.
   2. LMS (Leftmost S-type) character identification.
   3. Bucket allocation (head for L-types, tail for S-types).
@@ -62,17 +62,15 @@
 
 ---
 
-## 3. Inverted Index, Ranking, and Storage Format (Phase 2)
+## 2. Inverted Index, Ranking, and Storage Format
 
-### 3.1 Text Processing & Analyzer (`needlefish::Analyzer`)
+### 2.1 Text Processing & Analyzer (`needlefish::Analyzer`)
 - **UTF-8 Streaming Decoder**: Converts byte streams to 32-bit codepoints, replacing malformed bytes with `U+FFFD`.
 - **Unicode Word Segmentation**: Extracts letter and digit sequences across ASCII, Latin-1, Greek, Cyrillic, and CJK ideographs.
 - **Porter Stemmer**: Strict C++20 implementation of Martin Porter's 1980 algorithm passing all 23,531 official published test vectors (`voc.txt` $\to$ `output.txt`).
 - **Stopwords**: Configurable filter with English defaults.
 
----
-
-### 3.2 Posting List Compression & Block Structure (`needlefish::PostingListWriter` / `PostingListReader`)
+### 2.2 Posting List Compression & Block Structure (`needlefish::PostingListWriter` / `PostingListReader`)
 - **Block Size**: 128 docIDs per block.
 - **DocID Compression**: Frame-Of-Reference (FOR) bit-width packing with delta encoding. Decodes at **> 1.36 Billion postings/s**.
 - **Term Frequencies**: 7-bit continuation Variable-Byte (VByte).
@@ -84,9 +82,7 @@
   +----------------------+--------------------------+--------------------+--------------------+-----------------------+---------------------+
   ```
 
----
-
-### 3.3 Contiguous Flattened Radix Trie (`needlefish::RadixTrie`)
+### 2.3 Contiguous Flattened Radix Trie (`needlefish::RadixTrie`)
 - **Memory Representation**: Stored in a single flat array of 32-byte `RadixNode` structures with zero heap pointer chasing.
 - **Structure**:
   - `edge_offset` & `edge_len`: Offset and length in contiguous string pool buffer.
@@ -97,9 +93,7 @@
   - Search-as-you-type prefix search.
   - DFA / Automaton lockstep DFS traversal for Levenshtein / fuzzy search.
 
----
-
-### 3.4 Query Evaluation & Block-Max WAND (`needlefish::QueryEvaluator`)
+### 2.4 Query Evaluation & Block-Max WAND (`needlefish::QueryEvaluator`)
 - **BM25 Scoring**:
   $$score(D, Q) = \sum_{t \in Q} \ln\left(1 + \frac{N - n(t) + 0.5}{n(t) + 0.5}\right) \cdot \frac{f(t, D) \cdot (k_1 + 1)}{f(t, D) + k_1 \cdot (1 - b + b \cdot \frac{|D|}{\text{avgdl}})}$$
   (Default parameters: $k_1 = 0.9$, $b = 0.4$).
@@ -108,9 +102,7 @@
 - **Positional Phrase Queries**: Consecutive token position verification ($p_{i+1} = p_i + 1$).
 - **Snippet Generator**: Best-window sentence selector with HTML query term markers (`<em>term</em>`).
 
----
-
-### 3.5 Memory-Mapped `.idx` Binary File Layout
+### 2.5 Memory-Mapped `.idx` Binary File Layout
 
 All sections are strictly 64-byte aligned for zero-copy direct mapping:
 
@@ -148,3 +140,36 @@ All sections are strictly 64-byte aligned for zero-copy direct mapping:
 +---------------------------------------------------------------------------------------------------+
 ```
 
+---
+
+## 3. Directory Layout & Module Organization
+
+```
+/
+├── CMakeLists.txt              # Root build configuration (C++20, -Wall -Wextra -Wpedantic -Werror)
+├── CMakePresets.json           # Standard presets (debug, release, sanitize, tsan, bench)
+├── .clang-format               # Formatting guidelines
+├── .clang-tidy                 # Linter configuration
+├── .github/workflows/
+│   ├── ci.yml                  # Matrix {gcc, clang} x {debug, release, sanitize} + coverage
+│   └── release.yml             # Release binaries & GHCR Docker packaging
+├── src/                        # libindex core library (zero external dependencies)
+│   ├── bitvector/              # Rank/Select bitvector
+│   ├── wavelet/                # 8-level byte Wavelet Tree
+│   ├── sa/                     # SA-IS linear-time suffix array
+│   ├── fm/                     # FM-Index and Burrows-Wheeler Transform
+│   ├── util/                   # UTF-8 validator, Unicode tokenizer, Porter stemmer
+│   ├── invidx/                 # Posting lists, Frame-of-Reference (FOR), Radix Trie, Index builder
+│   ├── store/                  # Zero-copy memory mapped .idx file format
+│   └── rank/                   # BM25 scorer, Block-Max WAND, Query evaluator, Snippets
+├── cli/                        # CLI tool (index, search, stats)
+├── tests/                      # Unit & property test suites
+│   ├── unit/                   # Deterministic & boundary tests
+│   └── property/               # Exhaustive differential oracle property tests
+├── bench/                      # Performance benchmarking harness
+│   ├── fetch_corpora.sh        # SHA256-verified corpus download utility
+│   └── bench_main.cpp          # Google Benchmark suite
+└── docs/                       # Design documents & benchmark metrics
+    ├── design.md
+    └── benchmarks.md
+```
