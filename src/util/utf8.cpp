@@ -74,8 +74,8 @@ std::vector<char32_t> Utf8Decoder::decode(std::string_view utf8_str) {
                 i += 1;
                 continue;
             }
-            const char32_t cp = static_cast<char32_t>(
-                ((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F));
+            const char32_t cp = static_cast<char32_t>(((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) |
+                                                      ((b2 & 0x3F) << 6) | (b3 & 0x3F));
             if (cp < 0x10000 || cp > 0x10FFFF) {
                 result.push_back(REPLACEMENT_CHAR);
             } else {

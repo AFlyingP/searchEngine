@@ -148,14 +148,12 @@ void IndexBuilder::accumulate_document(uint32_t doc_id, std::string_view title,
     const uint32_t token_count = static_cast<uint32_t>(tokens.size());
     total_tokens_ += token_count;
 
-    doc_metadata_.push_back(DocMetadataRecord{
-        .doc_id = doc_id,
-        .token_count = token_count,
-        .title_offset = title_offset,
-        .title_len = title_len,
-        .text_offset = text_offset,
-        .text_len = text_len
-    });
+    doc_metadata_.push_back(DocMetadataRecord{.doc_id = doc_id,
+                                              .token_count = token_count,
+                                              .title_offset = title_offset,
+                                              .title_len = title_len,
+                                              .text_offset = text_offset,
+                                              .text_len = text_len});
 
     // 3. Accumulate term postings using internal contiguous doc_id
     std::map<std::string, std::vector<uint32_t>> doc_term_positions;
@@ -165,11 +163,9 @@ void IndexBuilder::accumulate_document(uint32_t doc_id, std::string_view title,
 
     for (auto& [term, pos_vec] : doc_term_positions) {
         auto& p_list = term_postings_[term];
-        p_list.push_back(DocPosting{
-            .doc_id = internal_id,
-            .term_freq = static_cast<uint32_t>(pos_vec.size()),
-            .positions = std::move(pos_vec)
-        });
+        p_list.push_back(DocPosting{.doc_id = internal_id,
+                                    .term_freq = static_cast<uint32_t>(pos_vec.size()),
+                                    .positions = std::move(pos_vec)});
     }
 
     estimated_memory_usage_ = stored_fields_.size() +
@@ -195,7 +191,8 @@ size_t IndexBuilder::index_jsonl_file(const std::filesystem::path& jsonl_path) {
         if (extract_jsonl_fields(line, external_doc_id, title, text)) {
             const uint32_t internal_id = static_cast<uint32_t>(doc_metadata_.size());
             // If external_doc_id was 0, use internal_id + 1
-            const uint32_t final_ext_id = (external_doc_id != 0) ? external_doc_id : (internal_id + 1);
+            const uint32_t final_ext_id =
+                (external_doc_id != 0) ? external_doc_id : (internal_id + 1);
             accumulate_document(final_ext_id, title, text);
             count++;
         }
