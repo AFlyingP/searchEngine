@@ -1,4 +1,4 @@
-# needlefish 🐟
+# needlefish
 
 [![CI](https://github.com/AFlyingP/searchEngine/actions/workflows/ci.yml/badge.svg)](https://github.com/AFlyingP/searchEngine/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -10,7 +10,7 @@ It combines state-of-the-art information retrieval algorithms (Okapi BM25, Block
 
 ---
 
-## ⚡ Performance Highlights
+## Performance Highlights
 
 | Benchmark | Latency / Op | Throughput | Description |
 | :--- | :--- | :--- | :--- |
@@ -18,13 +18,15 @@ It combines state-of-the-art information retrieval algorithms (Okapi BM25, Block
 | **`BitVector Rank1`** | **1.91 ns** | **525.1 Million ops/s** | 512-bit superblock $O(1)$ popcount rank |
 | **`BitVector Select1`** | **49.7 ns** | **20.1 Million ops/s** | Binary search + BMI2 `_pdep_u64` bit scan |
 | **`FM-Index Search`** | **921 ns** | **1.086 Million queries/s** | 10-character exact backward search count |
+| **`Regex Scan`** | **1.24 ms / 100KB** | **76.59 MB/s** | Linear-time non-backtracking Powerset DFA scan |
+| **`Levenshtein Intersect`**| **2.71 ms** | **368 queries/s** | Parametric Levenshtein DFA over 50,000-term Radix Trie |
 | **`Index Load Latency`** | **< 10 ms** | **Instantaneous** | Memory-mapped zero-copy section binding |
 
 *Benchmarks measured on x86-64 with `-O3 -march=native` using Google Benchmark.*
 
 ---
 
-## 🌟 Key Features
+## Key Features
 
 * **Zero Third-Party Core Dependencies**: Core library (`libneedlefish_core`) relies exclusively on the C++20 standard library.
 * **Succinct Data Structures**:
@@ -47,13 +49,15 @@ It combines state-of-the-art information retrieval algorithms (Okapi BM25, Block
   * **Search-As-You-Type Autocomplete**: Fast prefix completions and distance-weighted typo suggestions.
 * **Hybrid Query Engine**:
   * Seamlessly routes natural language queries to BM25/WAND, typo queries (`term~2`) to Levenshtein automata, regex (`/pattern/`) to the DFA scanner, and raw substrings to the FM-Index.
+* **Embedded HTTP REST Server & Web UI**:
+  * Built-in zero-dependency HTTP server and modern dark/light web UI dashboard.
 * **Zero-Copy Memory-Mapped Storage**:
   * Single `.idx` binary file format with 64-byte aligned sections and CRC-32 integrity validation.
   * Instantaneous load time ($< 10 \text{ ms}$) via Windows `CreateFileMapping` / POSIX `mmap`.
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 * A C++20 compliant compiler: GCC 13+, Clang 16+, or MSVC 2022+
@@ -72,7 +76,7 @@ cmake --build --preset debug --target test_needlefish_unit
 
 ### Run Tests
 ```bash
-# Run unit & golden tests (39 tests including 23,531-word Porter golden suite)
+# Run unit & golden tests (45 tests including 23,531-word Porter golden suite)
 ./build/debug/tests/test_needlefish_unit.exe
 
 # Run differential property tests (5,000 Levenshtein DFA vs DP matrix trials & 1,000 WAND trials)
@@ -81,7 +85,7 @@ cmake --build --preset debug --target test_needlefish_unit
 
 ---
 
-## 💻 CLI Usage
+## CLI Usage
 
 ### 1. Build an Index from JSONL
 Create or provide a `.jsonl` document file (format: `{"id": 1, "title": "...", "text": "..."}`):
@@ -90,7 +94,13 @@ Create or provide a `.jsonl` document file (format: `{"id": 1, "title": "...", "
 ./build/debug/needlefish.exe index --input corpus.jsonl --output corpus.idx --enable-substring
 ```
 
-### 2. Search the Index
+### 2. Launch the Web UI & REST API Server
+```bash
+./build/debug/needlefish.exe serve --index corpus.idx --port 8080 --web-dir web
+```
+Open `http://localhost:8080` in any browser to use the search UI.
+
+### 3. Search the Index via CLI
 ```bash
 # Multi-term scored BM25 query with WAND pruning
 ./build/debug/needlefish.exe search --index corpus.idx --query "information retrieval systems"
@@ -105,7 +115,7 @@ Create or provide a `.jsonl` document file (format: `{"id": 1, "title": "...", "
 ./build/debug/needlefish.exe search --index corpus.idx --query "/C\+\+\d+/"
 ```
 
-### 3. Autocomplete & Suggestions
+### 4. Autocomplete & Suggestions
 ```bash
 # Prefix autocomplete
 ./build/debug/needlefish.exe suggest --index corpus.idx --query "infor"
@@ -114,7 +124,7 @@ Create or provide a `.jsonl` document file (format: `{"id": 1, "title": "...", "
 ./build/debug/needlefish.exe suggest --index corpus.idx --query "sukcinct" --fuzzy
 ```
 
-### 4. Display Index Statistics
+### 5. Display Index Statistics
 ```bash
 ./build/debug/needlefish.exe stats --index corpus.idx
 ```

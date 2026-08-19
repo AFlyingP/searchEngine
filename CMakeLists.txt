@@ -39,7 +39,12 @@ add_library(needlefish_core
     src/automata/regex.cpp
     src/automata/levenshtein.cpp
     src/automata/autocomplete.cpp
+    src/server/http_server.cpp
 )
+
+if (WIN32)
+    target_link_libraries(needlefish_core PUBLIC ws2_32)
+endif()
 
 target_include_directories(needlefish_core
     PUBLIC

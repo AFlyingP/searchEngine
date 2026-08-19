@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>needlefish search engine</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body class="dark-theme">
+  <div class="app-container">
+    
+    <!-- Top Navigation Header -->
+    <header class="top-header">
+      <div class="logo-area">
+        <span class="logo-text">needlefish</span>
+        <span class="badge version-badge">C++20 Engine</span>
+      </div>
+      
+      <div class="header-actions">
+        <div id="stats-pill" class="stats-pill">
+          <span id="doc-count">Loading index...</span>
+        </div>
+        <button id="theme-toggle" class="btn-icon" aria-label="Toggle Theme" title="Toggle Theme">
+          <span id="theme-icon">Light</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Hero Search Section -->
+    <main class="main-content">
+      <div class="search-hero">
+        <h1 class="hero-title">Sub-Millisecond Search Engine</h1>
+        <p class="hero-subtitle">Succinct data structures, Block-Max WAND dynamic pruning, and Levenshtein automata</p>
+        
+        <!-- Search Input Bar & Dropdown Container -->
+        <div class="search-box-wrapper">
+          <div class="search-box">
+            <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input 
+              type="text" 
+              id="search-input" 
+              placeholder="Search across documents, /regex/, or typos~2..." 
+              autocomplete="off" 
+              spellcheck="false"
+              autofocus
+            >
+            <button id="clear-btn" class="btn-clear hidden" aria-label="Clear Search">Clear</button>
+            <div class="kbd-shortcut"><kbd>/</kbd></div>
+          </div>
+
+          <!-- Live Autocomplete Suggestions -->
+          <div id="suggestions-dropdown" class="suggestions-dropdown hidden"></div>
+        </div>
+
+        <!-- Search Mode Selector Pills -->
+        <div class="mode-selector">
+          <button class="mode-btn active" data-mode="auto">Auto (Hybrid)</button>
+          <button class="mode-btn" data-mode="bm25">BM25 + WAND</button>
+          <button class="mode-btn" data-mode="fuzzy">Fuzzy Typo</button>
+          <button class="mode-btn" data-mode="regex">Regex</button>
+          <button class="mode-btn" data-mode="substring">FM Substring</button>
+        </div>
+
+        <!-- Sample Query Chips -->
+        <div class="sample-queries">
+          <span class="sample-label">Try sample:</span>
+          <button class="chip" data-query="information retrieval systems">information retrieval</button>
+          <button class="chip" data-query='"distributed systems"'>"distributed systems"</button>
+          <button class="chip" data-query="sukcinct~2">sukcinct~2 (typo)</button>
+          <button class="chip" data-query="/[A-Za-z]+_[0-9]+/">/[A-Za-z]+_[0-9]+/ (regex)</button>
+        </div>
+      </div>
+
+      <!-- Performance & Latency HUD -->
+      <section id="perf-hud" class="perf-hud hidden">
+        <div class="hud-item">
+          <span class="hud-label">Execution Time</span>
+          <span id="hud-latency" class="hud-val highlight">--</span>
+        </div>
+        <div class="hud-item">
+          <span class="hud-label">Matches Found</span>
+          <span id="hud-matches" class="hud-val">--</span>
+        </div>
+        <div class="hud-item">
+          <span class="hud-label">Query Mode</span>
+          <span id="hud-mode" class="hud-val">--</span>
+        </div>
+        <div class="hud-item">
+          <span class="hud-label">Pruning Efficiency</span>
+          <span id="hud-pruning" class="hud-val">Block-Max Active</span>
+        </div>
+      </section>
+
+      <!-- Did You Mean Banner -->
+      <div id="did-you-mean" class="did-you-mean-banner hidden">
+        Did you mean: <button id="correction-link" class="link-btn"></button>?
+      </div>
+
+      <!-- Search Results Feed -->
+      <section id="results-container" class="results-container">
+        <div class="initial-empty-state">
+          <p>Type a query or select a sample above to search the memory-mapped index.</p>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <span>needlefish C++20 search engine | Zero third-party core dependencies</span>
+    </footer>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
