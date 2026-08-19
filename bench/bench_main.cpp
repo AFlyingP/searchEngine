@@ -211,8 +211,8 @@ static void BM_Levenshtein_Trie_Intersect(benchmark::State& state) {
         for (size_t j = 0; j < len; ++j) {
             word += alphabet[rng() % alphabet.size()];
         }
-        trie.insert(word, TermPayload{.term_id = i,
-                                      .doc_freq = static_cast<uint32_t>(1 + (rng() % 100))});
+        trie.insert(
+            word, TermPayload{.term_id = i, .doc_freq = static_cast<uint32_t>(1 + (rng() % 100))});
     }
 
     LevenshteinAutomaton dfa("algorithm", 2);
