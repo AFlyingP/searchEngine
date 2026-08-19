@@ -83,6 +83,7 @@ class Regex {
     [[nodiscard]] std::vector<std::pair<size_t, size_t>> find_all(std::string_view text) const;
 
     [[nodiscard]] std::string_view pattern() const noexcept { return pattern_; }
+    [[nodiscard]] const std::shared_ptr<RegexASTNode>& ast() const noexcept { return ast_; }
 
   private:
     struct NFAFragment {
