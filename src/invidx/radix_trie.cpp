@@ -342,6 +342,30 @@ RadixTrie RadixTrie::deserialize(std::istream& is) {
         }
     }
 
+    // Validate memory safety: all node edge spans must reside inside string pool,
+    // and all child/sibling references must index valid nodes.
+    for (size_t i = 0; i < trie.nodes_.size(); ++i) {
+        const auto& node = trie.nodes_[i];
+        const uint64_t edge_off = node.edge_offset;
+        const uint64_t edge_l = node.edge_len;
+
+        if (edge_off > pool_sz || edge_l > pool_sz - edge_off) {
+            throw std::runtime_error("Corrupted RadixTrie: node " + std::to_string(i) +
+                                     " edge range [" + std::to_string(edge_off) + ", " +
+                                     std::to_string(edge_off + edge_l) +
+                                     "] exceeds pool size " + std::to_string(pool_sz));
+        }
+
+        if (node.first_child != 0 && node.first_child >= num_n) {
+            throw std::runtime_error("Corrupted RadixTrie: invalid first_child link in node " +
+                                     std::to_string(i));
+        }
+        if (node.next_sibling != 0 && node.next_sibling >= num_n) {
+            throw std::runtime_error("Corrupted RadixTrie: invalid next_sibling link in node " +
+                                     std::to_string(i));
+        }
+    }
+
     return trie;
 }
 

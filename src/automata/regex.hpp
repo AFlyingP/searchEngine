@@ -68,6 +68,7 @@ class RegexParser {
 
     std::string_view pattern_;
     size_t pos_{0};
+    size_t depth_{0};
 };
 
 /**

@@ -119,7 +119,8 @@ PostingListReader::PostingListReader(std::span<const uint8_t> postings_data,
 }
 
 void PostingListReader::load_next_block() {
-    if (postings_offset_ >= postings_data_.size() || docs_read_total_ >= total_docs_) {
+    if (postings_offset_ + sizeof(curr_block_header_) > postings_data_.size() ||
+        docs_read_total_ >= total_docs_) {
         at_end_ = true;
         return;
     }
@@ -129,11 +130,23 @@ void PostingListReader::load_next_block() {
                 sizeof(curr_block_header_));
     postings_offset_ += sizeof(curr_block_header_);
 
+    if (curr_block_header_.num_docs == 0 || curr_block_header_.num_docs > 128 ||
+        curr_block_header_.bit_width > 32) {
+        at_end_ = true;
+        return;
+    }
+
+    const size_t packed_bytes = 16 * curr_block_header_.bit_width;
+    if (postings_offset_ + packed_bytes > postings_data_.size()) {
+        at_end_ = true;
+        return;
+    }
+
     // Unpack docID deltas
-    uint32_t deltas[128];
+    uint32_t deltas[128] = {0};
     BitPacking::unpack128(postings_data_.data() + postings_offset_, deltas,
                           curr_block_header_.bit_width);
-    postings_offset_ += 16 * curr_block_header_.bit_width;
+    postings_offset_ += packed_bytes;
 
     // Apply prefix sums to deltas
     uint32_t running_doc = curr_doc_id_;
@@ -144,25 +157,37 @@ void PostingListReader::load_next_block() {
 
     // Decode Varint freqs
     const uint8_t* ptr = postings_data_.data() + postings_offset_;
+    const uint8_t* end = postings_data_.data() + postings_data_.size();
+
     for (size_t i = 0; i < curr_block_header_.num_docs; ++i) {
+        if (ptr >= end) {
+            decoded_freqs_[i] = 1;
+            continue;
+        }
         ptr += Varint::decode_uint32(ptr, &decoded_freqs_[i]);
     }
 
     // Decode Varint position counts and record byte offsets
     uint32_t curr_pos_stream_offset = curr_block_header_.positions_offset;
+    const uint8_t* pos_end = positions_data_.data() + positions_data_.size();
+
     for (size_t i = 0; i < curr_block_header_.num_docs; ++i) {
         uint32_t pos_count = 0;
-        ptr += Varint::decode_uint32(ptr, &pos_count);
+        if (ptr < end) {
+            ptr += Varint::decode_uint32(ptr, &pos_count);
+        }
         decoded_pos_lens_[i] = pos_count;
         decoded_pos_offsets_[i] = curr_pos_stream_offset;
 
-        // Skip pos_count varints in positions stream to find next doc's pos offset
-        const uint8_t* pos_ptr = positions_data_.data() + curr_pos_stream_offset;
-        for (uint32_t p = 0; p < pos_count; ++p) {
-            uint32_t dummy = 0;
-            pos_ptr += Varint::decode_uint32(pos_ptr, &dummy);
+        if (curr_pos_stream_offset < positions_data_.size()) {
+            const uint8_t* pos_ptr = positions_data_.data() + curr_pos_stream_offset;
+            for (uint32_t p = 0; p < pos_count; ++p) {
+                if (pos_ptr >= pos_end) break;
+                uint32_t dummy = 0;
+                pos_ptr += Varint::decode_uint32(pos_ptr, &dummy);
+            }
+            curr_pos_stream_offset = static_cast<uint32_t>(pos_ptr - positions_data_.data());
         }
-        curr_pos_stream_offset = static_cast<uint32_t>(pos_ptr - positions_data_.data());
     }
 
     postings_offset_ = static_cast<size_t>(ptr - postings_data_.data());

@@ -51,7 +51,7 @@ void IndexView::parse_sections(std::span<const uint8_t> data) {
     }
 
     const size_t section_table_size = header.num_sections * sizeof(SectionEntry);
-    if (sizeof(IndexHeader) + section_table_size > data.size()) {
+    if (header.num_sections > 1000 || section_table_size > data.size() - sizeof(IndexHeader)) {
         throw std::runtime_error("Corrupted index: invalid section table size");
     }
 
@@ -59,8 +59,8 @@ void IndexView::parse_sections(std::span<const uint8_t> data) {
     std::memcpy(sections.data(), data.data() + sizeof(IndexHeader), section_table_size);
 
     for (const auto& sec : sections) {
-        if (sec.offset + sec.length > data.size()) {
-            throw std::runtime_error("Corrupted index: section bounds out of range");
+        if (sec.offset > data.size() || sec.length > data.size() - sec.offset) {
+            throw std::runtime_error("Corrupted index: section bounds out of range or integer overflow");
         }
 
         std::span<const uint8_t> sec_data(data.data() + sec.offset, sec.length);
@@ -125,7 +125,8 @@ const DocMetadataRecord& IndexView::doc_metadata(uint32_t doc_id) const {
 
 std::string_view IndexView::doc_title(uint32_t doc_id) const {
     const auto& meta = doc_metadata(doc_id);
-    if (meta.title_offset + meta.title_len > stored_fields_span_.size()) {
+    if (meta.title_offset > stored_fields_span_.size() ||
+        meta.title_len > stored_fields_span_.size() - meta.title_offset) {
         return "";
     }
     return std::string_view(
@@ -135,7 +136,8 @@ std::string_view IndexView::doc_title(uint32_t doc_id) const {
 
 std::string_view IndexView::doc_text(uint32_t doc_id) const {
     const auto& meta = doc_metadata(doc_id);
-    if (meta.text_offset + meta.text_len > stored_fields_span_.size()) {
+    if (meta.text_offset > stored_fields_span_.size() ||
+        meta.text_len > stored_fields_span_.size() - meta.text_offset) {
         return "";
     }
     return std::string_view(
@@ -148,7 +150,12 @@ PostingListReader IndexView::get_posting_reader(const TermPayload& payload) cons
         return PostingListReader{};
     }
 
-    std::span<const uint8_t> post_span = postings_span_.subspan(payload.postings_offset);
+    const size_t available = postings_span_.size() - payload.postings_offset;
+    const size_t bytes_to_read = (payload.postings_bytes > 0)
+                                     ? std::min<size_t>(payload.postings_bytes, available)
+                                     : available;
+    std::span<const uint8_t> post_span =
+        postings_span_.subspan(payload.postings_offset, bytes_to_read);
     return PostingListReader(post_span, positions_span_, payload.doc_freq);
 }
 

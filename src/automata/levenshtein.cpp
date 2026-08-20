@@ -5,12 +5,12 @@
 namespace needlefish {
 
 LevenshteinAutomaton::LevenshteinAutomaton(std::string_view target, size_t max_distance)
-    : target_(target), max_distance_(max_distance) {}
+    : target_(target.substr(0, std::min<size_t>(target.size(), 128))), max_distance_(max_distance) {}
 
 LevenshteinAutomaton::State LevenshteinAutomaton::initial_state() const {
     State state(target_.size() + 1);
     for (size_t i = 0; i <= target_.size(); ++i) {
-        state[i] = static_cast<uint8_t>(i);
+        state[i] = static_cast<uint8_t>(std::min<size_t>(i, 255));
     }
     return state;
 }
@@ -19,15 +19,15 @@ LevenshteinAutomaton::State LevenshteinAutomaton::step(const State& state, char 
     const size_t m = target_.size();
     State next_state(m + 1);
 
-    next_state[0] = static_cast<uint8_t>(state[0] + 1);
+    next_state[0] = static_cast<uint8_t>(std::min<uint32_t>(state[0] + 1, 255));
 
     for (size_t j = 1; j <= m; ++j) {
-        const uint8_t cost = (target_[j - 1] == c) ? 0 : 1;
-        uint8_t sub = static_cast<uint8_t>(state[j - 1] + cost);
-        uint8_t ins = static_cast<uint8_t>(next_state[j - 1] + 1);
-        uint8_t del = static_cast<uint8_t>(state[j] + 1);
+        const uint32_t cost = (target_[j - 1] == c) ? 0 : 1;
+        uint32_t sub = std::min<uint32_t>(state[j - 1] + cost, 255);
+        uint32_t ins = std::min<uint32_t>(next_state[j - 1] + 1, 255);
+        uint32_t del = std::min<uint32_t>(state[j] + 1, 255);
 
-        next_state[j] = std::min({sub, ins, del});
+        next_state[j] = static_cast<uint8_t>(std::min({sub, ins, del}));
     }
 
     return next_state;

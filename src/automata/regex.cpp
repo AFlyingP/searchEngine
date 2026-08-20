@@ -45,6 +45,14 @@ std::shared_ptr<RegexASTNode> RegexParser::parse(std::string_view pattern) {
 }
 
 std::shared_ptr<RegexASTNode> RegexParser::parse_expression() {
+    if (++depth_ > 64) {
+        throw std::runtime_error("Regex parser recursion depth limit exceeded (pattern too complex)");
+    }
+    struct DepthGuard {
+        size_t& d;
+        ~DepthGuard() { --d; }
+    } guard{depth_};
+
     auto left = parse_concat();
     if (match('|')) {
         auto alt_node = std::make_shared<RegexASTNode>();

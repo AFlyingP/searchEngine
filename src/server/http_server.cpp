@@ -411,17 +411,47 @@ HttpResponse HttpServer::handle_static_file(std::string_view path) const {
         path = "/index.html";
     }
 
-    std::filesystem::path local_path =
-        std::filesystem::path(static_dir_) / path.substr(path.starts_with('/') ? 1 : 0);
+    // Reject path traversal attempts explicitly
+    if (path.find("..") != std::string_view::npos || path.find('\\') != std::string_view::npos) {
+        return HttpResponse{.status_code = 403,
+                            .status_text = "Forbidden",
+                            .content_type = "text/plain",
+                            .body = "403 Forbidden: Path traversal prohibited"};
+    }
 
-    if (!std::filesystem::exists(local_path) || std::filesystem::is_directory(local_path)) {
+    std::error_code ec;
+    std::filesystem::path base_dir = std::filesystem::weakly_canonical(std::filesystem::path(static_dir_), ec);
+    if (ec) {
+        base_dir = std::filesystem::absolute(std::filesystem::path(static_dir_));
+    }
+
+    std::filesystem::path relative_subpath = path.substr(path.starts_with('/') ? 1 : 0);
+    std::filesystem::path candidate_path = std::filesystem::weakly_canonical(base_dir / relative_subpath, ec);
+    if (ec) {
+        return HttpResponse{.status_code = 400,
+                            .status_text = "Bad Request",
+                            .content_type = "text/plain",
+                            .body = "400 Bad Request"};
+    }
+
+    // Verify canonical path is strictly contained within base_dir
+    auto base_str = base_dir.string();
+    auto cand_str = candidate_path.string();
+    if (!cand_str.starts_with(base_str)) {
+        return HttpResponse{.status_code = 403,
+                            .status_text = "Forbidden",
+                            .content_type = "text/plain",
+                            .body = "403 Forbidden: Access denied"};
+    }
+
+    if (!std::filesystem::exists(candidate_path) || std::filesystem::is_directory(candidate_path)) {
         return HttpResponse{.status_code = 404,
                             .status_text = "Not Found",
                             .content_type = "text/plain",
                             .body = "404 Not Found"};
     }
 
-    std::ifstream file(local_path, std::ios::binary);
+    std::ifstream file(candidate_path, std::ios::binary);
     if (!file) {
         return HttpResponse{.status_code = 500,
                             .status_text = "Internal Server Error",
@@ -432,7 +462,7 @@ HttpResponse HttpServer::handle_static_file(std::string_view path) const {
     std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     return HttpResponse{.status_code = 200,
                         .status_text = "OK",
-                        .content_type = get_mime_type(local_path.string()),
+                        .content_type = get_mime_type(candidate_path.string()),
                         .body = std::move(content)};
 }
 

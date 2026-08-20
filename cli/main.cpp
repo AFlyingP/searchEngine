@@ -16,12 +16,12 @@
 using namespace needlefish;
 
 void print_usage() {
-    std::cout << "needlefish v0.3.0 - high-performance full-text search engine\n\n";
+    std::cout << "needlefish v1.0.0 - high-performance full-text search engine\n\n";
     std::cout << "Usage: needlefish <command> [options]\n\n";
     std::cout << "Commands:\n";
     std::cout << "  index    Build an index from a JSONL file\n";
     std::cout
-        << "           Options: --input <file.jsonl> --output <index.idx> [--enable-substring]\n\n";
+        << "           Options: --input <file.jsonl> --output <index.idx> [--enable-substring | --enable-fm]\n\n";
     std::cout << "  search   Search an existing index\n";
     std::cout << "           Options: --index <index.idx> --query \"<query>\" [--k <num>] [--fuzzy "
                  "<dist>] [--regex] [--substring]\n\n";
@@ -45,7 +45,7 @@ int cmd_index(int argc, char* argv[]) {
         } else if (arg == "--output" || arg == "-o") {
             if (i + 1 < argc)
                 output_path = argv[++i];
-        } else if (arg == "--enable-substring" || arg == "-s") {
+        } else if (arg == "--enable-substring" || arg == "-s" || arg == "--enable-fm") {
             enable_substring = true;
         }
     }
@@ -325,23 +325,28 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    std::string_view cmd = argv[1];
-    if (cmd == "index") {
-        return cmd_index(argc, argv);
-    } else if (cmd == "search") {
-        return cmd_search(argc, argv);
-    } else if (cmd == "suggest") {
-        return cmd_suggest(argc, argv);
-    } else if (cmd == "stats") {
-        return cmd_stats(argc, argv);
-    } else if (cmd == "serve") {
-        return cmd_serve(argc, argv);
-    } else if (cmd == "--help" || cmd == "-h" || cmd == "help") {
-        print_usage();
-        return 0;
-    } else {
-        std::cerr << "Unknown command: " << cmd << "\n\n";
-        print_usage();
+    try {
+        std::string_view cmd = argv[1];
+        if (cmd == "index") {
+            return cmd_index(argc, argv);
+        } else if (cmd == "search") {
+            return cmd_search(argc, argv);
+        } else if (cmd == "suggest") {
+            return cmd_suggest(argc, argv);
+        } else if (cmd == "stats") {
+            return cmd_stats(argc, argv);
+        } else if (cmd == "serve") {
+            return cmd_serve(argc, argv);
+        } else if (cmd == "--help" || cmd == "-h" || cmd == "help") {
+            print_usage();
+            return 0;
+        } else {
+            std::cerr << "Unknown command: " << cmd << "\n\n";
+            print_usage();
+            return 1;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << "\n";
         return 1;
     }
 }
