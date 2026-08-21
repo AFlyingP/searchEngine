@@ -17,7 +17,7 @@ jobs:
             cmake_flags: -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++"
           - os: macos-latest
             artifact_name: needlefish-macos-universal
-            cmake_flags: ""
+            cmake_flags: "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
     steps:
       - uses: actions/checkout@v4
       - name: Install Dependencies
@@ -27,14 +27,24 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install ninja
       - name: Configure CMake
-        run: cmake -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_LTO=ON ${{ matrix.cmake_flags }}
+        run: cmake -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_LTO=ON -DBUILD_TESTS=OFF -DBUILD_BENCHMARKS=OFF -DBUILD_FUZZERS=OFF ${{ matrix.cmake_flags }}
       - name: Build
-        run: cmake --build build/release --target needlefish_cli
+        run: cmake --build build/release --target needlefish
+      - name: Package Binary
+        run: |
+          mkdir -p dist
+          cp build/release/bin/needlefish* dist/
+          tar -czf dist/${{ matrix.artifact_name }}.tar.gz -C dist needlefish*
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: build/release/cli/needlefish*
+          path: dist/${{ matrix.artifact_name }}.tar.gz
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist/${{ matrix.artifact_name }}.tar.gz
 
   publish-ghcr:
     name: Build and Push Docker image
@@ -44,6 +54,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - name: Set lower case owner name
+        run: echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> ${GITHUB_ENV}
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -55,4 +67,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          tags: ghcr.io/${{ env.REPO_LC }}:${{ github.ref_name }}

@@ -33,11 +33,11 @@
 | **SIMD Bit-Packing Unpack** | **413.2 Million / sec** | **1.0× faster** |
 | Scalar Fallback Unpack | 417.1 Million / sec | 1.00× (Baseline) |
 
-### C. Typo-Tolerant Search: Schulz-Mihov DFA ∩ Radix Trie vs Brute-Force DP
+### C. Typo-Tolerant Search: Levenshtein DP-Row Automaton ∩ Radix Trie vs Brute-Force DP
 
 | Approach | Latency (k=1) | Latency (k=2) | Lexicon Scalability |
 | :--- | :--- | :--- | :--- |
-| **Schulz-Mihov DFA ∩ Flattened Trie** | **< 150 µs** | **< 850 µs** | $O(|q|)$ parametric state transitions |
+| **Levenshtein DP-Row Automaton ∩ Flattened Trie** | **< 150 µs** | **< 850 µs** | $O(|q|)$ parametric state transitions |
 | Exhaustive DP Matrix against Lexicon | ~45,000 µs | ~65,000 µs | $O(N \cdot |q| \cdot |w|)$ linear scan |
 
 ## 3. Comparative Architecture Overview
@@ -46,7 +46,7 @@
 | :--- | :--- | :--- | :--- |
 | **Language / Standard** | C++20 (Zero Dependencies) | Rust | Rust |
 | **Substring Search** | Hand-crafted FM-Index (SA-IS + Wavelet) | Trigram Inverted Index | Regex / Trigram |
-| **Fuzzy Matching** | Schulz-Mihov Universal Automata ∩ Trie | FST Levenshtein Automata | Levenshtein DFA |
+| **Fuzzy Matching** | Levenshtein DP-Row Automata ∩ Trie | FST Levenshtein Automata | Levenshtein DFA |
 | **Index Format** | Single-file zero-copy memory mapped | Segment directory | LMDB KV Store |
 | **Posting Compression** | Bit-width PFOR + SIMD | SIMD-BP128 | Bitmap Roaring |
 | **Disjunctive Ranking** | Block-Max WAND | Block-Max WAND | Bucket Ranking |

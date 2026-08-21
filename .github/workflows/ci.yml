@@ -16,7 +16,27 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang-format
       - name: Check Formatting
         run: |
-          find src tests cli bench -name '*.cpp' -o -name '*.hpp' | xargs clang-format --dry-run --Werror
+          find src include tests cli bench fuzz -name '*.cpp' -o -name '*.hpp' | xargs clang-format --dry-run --Werror
+
+  tidy:
+    name: Clang-Tidy Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang-tidy clang llvm
+      - name: Configure CMake
+        run: |
+          cmake -B build/tidy -G Ninja \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER=clang \
+            -DBUILD_TESTS=ON
+      - name: Run Clang-Tidy
+        run: |
+          run-clang-tidy -p build/tidy src/
 
   build-test:
     name: Build & Test (${{ matrix.compiler }}, ${{ matrix.preset }})
@@ -25,7 +45,7 @@ jobs:
       fail-fast: false
       matrix:
         compiler: [gcc, clang]
-        preset: [debug, release, sanitize]
+        preset: [debug, release, sanitize, tsan]
     steps:
       - uses: actions/checkout@v4
       - name: Install Dependencies
@@ -48,8 +68,30 @@ jobs:
       - name: Run Tests
         run: ctest --preset ${{ matrix.preset }} --output-on-failure
 
+  fuzz:
+    name: Fuzz Testing (Clang libFuzzer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang llvm
+      - name: Configure CMake with Fuzzing
+        run: |
+          cmake -B build/fuzz -G Ninja \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DENABLE_LIBFUZZER=ON \
+            -DBUILD_FUZZERS=ON
+      - name: Build Fuzzers
+        run: cmake --build build/fuzz
+      - name: Run Fuzz Smoke Test
+        run: |
+          ./build/fuzz/bin/fuzz_regex -max_total_time=10
+
   coverage:
-    name: Code Coverage
+    name: Code Coverage Gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,11 +109,14 @@ jobs:
           cmake --build build/coverage
       - name: Run Test Suite
         run: ctest --test-dir build/coverage --output-on-failure
-      - name: Generate Coverage Report
+      - name: Generate and Validate Coverage Report
         run: |
-          llvm-profdata merge -sparse default.profraw -o coverage.profdata || true
-          llvm-cov show ./build/coverage/tests/test_needlefish_unit \
+          llvm-profdata merge -sparse default.profraw -o coverage.profdata
+          llvm-cov show ./build/coverage/bin/test_needlefish_unit \
             -instr-profile=coverage.profdata \
             -ignore-filename-regex='(tests/|_deps/)' \
-            -format=text > coverage.txt || true
-          cat coverage.txt || true
+            -format=text > coverage.txt
+          cat coverage.txt
+          llvm-cov report ./build/coverage/bin/test_needlefish_unit \
+            -instr-profile=coverage.profdata \
+            -ignore-filename-regex='(tests/|_deps/)'

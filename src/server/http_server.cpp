@@ -138,19 +138,36 @@ std::string get_mime_type(std::string_view path) {
     return "application/octet-stream";
 }
 
-// Token bucket rate limiter per client IP
+#include <zlib.h>
+
+// Token bucket rate limiter with LRU eviction per client IP (IPv4 and IPv6)
 struct RateLimiter {
     struct Bucket {
         double tokens{20.0};
         std::chrono::steady_clock::time_point last_update{std::chrono::steady_clock::now()};
     };
     std::mutex mtx;
-    std::unordered_map<std::string, Bucket> buckets;
+    static constexpr size_t MAX_IPS = 10000;
+    std::list<std::string> lru_list;
+    std::unordered_map<std::string, std::pair<Bucket, std::list<std::string>::iterator>> buckets;
 
     bool allow(const std::string& ip) {
         std::lock_guard<std::mutex> lock(mtx);
         auto now = std::chrono::steady_clock::now();
-        auto& b = buckets[ip];
+        auto it = buckets.find(ip);
+        if (it == buckets.end()) {
+            if (buckets.size() >= MAX_IPS) {
+                std::string oldest = lru_list.back();
+                lru_list.pop_back();
+                buckets.erase(oldest);
+            }
+            lru_list.push_front(ip);
+            buckets[ip] = {Bucket{.tokens = 19.0, .last_update = now}, lru_list.begin()};
+            return true;
+        }
+
+        lru_list.splice(lru_list.begin(), lru_list, it->second.second);
+        auto& b = it->second.first;
         double elapsed = std::chrono::duration<double>(now - b.last_update).count();
         b.last_update = now;
         b.tokens = std::min(20.0, b.tokens + elapsed * 10.0);  // 10 QPS fill rate
@@ -163,6 +180,31 @@ struct RateLimiter {
 };
 
 RateLimiter g_rate_limiter;
+
+std::string gzip_compress(std::string_view data) {
+    if (data.empty()) return {};
+    z_stream zs;
+    std::memset(&zs, 0, sizeof(zs));
+    if (deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+        return std::string(data);
+    }
+    zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data.data()));
+    zs.avail_in = static_cast<uInt>(data.size());
+
+    std::string out;
+    out.resize(deflateBound(&zs, static_cast<uLong>(data.size())) + 32);
+    zs.next_out = reinterpret_cast<Bytef*>(out.data());
+    zs.avail_out = static_cast<uInt>(out.size());
+
+    int ret = deflate(&zs, Z_FINISH);
+    if (ret != Z_STREAM_END) {
+        deflateEnd(&zs);
+        return std::string(data);
+    }
+    out.resize(zs.total_out);
+    deflateEnd(&zs);
+    return out;
+}
 
 }  // namespace
 
@@ -484,16 +526,17 @@ HttpResponse HttpServer::handle_api_suggest(const HttpRequest& req) const {
 }
 
 HttpResponse HttpServer::handle_api_stats(const HttpRequest&) const {
+    const auto& stats = index_.stats();
     std::ostringstream json;
     json << "{\n";
     json << "  \"total_docs\": " << index_.total_docs() << ",\n";
-    json << "  \"total_tokens\": " << index_.stats().total_tokens << ",\n";
-    json << "  \"avg_doc_length\": " << index_.stats().avg_doc_len << ",\n";
+    json << "  \"total_tokens\": " << stats.total_tokens << ",\n";
+    json << "  \"avg_doc_length\": " << stats.avg_doc_len << ",\n";
     json << "  \"unique_terms\": " << index_.term_dict().num_terms() << ",\n";
     json << "  \"trie_nodes\": " << index_.term_dict().num_nodes() << ",\n";
     json << "  \"has_fm_index\": " << (index_.has_fm_index() ? "true" : "false") << ",\n";
     json << "  \"file_size_bytes\": " << index_.file_size() << ",\n";
-    json << "  \"bm25\": {\"k1\": 0.9, \"b\": 0.4}\n";
+    json << "  \"bm25\": {\"k1\": " << stats.k1 << ", \"b\": " << stats.b << "}\n";
     json << "}\n";
 
     return HttpResponse{.status_code = 200, .status_text = "OK", .body = json.str()};
@@ -568,10 +611,147 @@ HttpResponse HttpServer::handle_static_file(std::string_view path) const {
     }
 
     std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    std::string mime = get_mime_type(candidate_path.string());
     return HttpResponse{.status_code = 200,
                         .status_text = "OK",
-                        .content_type = get_mime_type(candidate_path.string()),
+                        .content_type = std::move(mime),
                         .body = std::move(content)};
+}
+
+void HttpServer::worker_loop() {
+    while (!stop_workers_.load()) {
+        uintptr_t sock_val = 0;
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex_);
+            queue_cv_.wait(lock, [this]() {
+                return !task_queue_.empty() || stop_workers_.load();
+            });
+            if (stop_workers_.load() && task_queue_.empty()) {
+                break;
+            }
+            if (!task_queue_.empty()) {
+                sock_val = task_queue_.front();
+                task_queue_.pop();
+            }
+        }
+        if (sock_val == 0) continue;
+        socket_t client_fd = static_cast<socket_t>(sock_val);
+
+        // Worker exclusively owns client_fd end-to-end
+#if defined(_WIN32) || defined(_WIN64)
+        DWORD timeout_ms = 5000;
+        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout_ms),
+                   sizeof(timeout_ms));
+        setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout_ms),
+                   sizeof(timeout_ms));
+#else
+        struct timeval tv;
+        tv.tv_sec = 5;
+        tv.tv_usec = 0;
+        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
+
+        auto start_recv_time = std::chrono::steady_clock::now();
+        std::string raw_request;
+        raw_request.reserve(4096);
+        std::array<char, 2048> chunk{};
+        size_t expected_total_size = 0;
+        bool headers_complete = false;
+        bool timed_out = false;
+
+        while (raw_request.size() < 65536) {
+            auto now = std::chrono::steady_clock::now();
+            double total_elapsed = std::chrono::duration<double>(now - start_recv_time).count();
+            if (total_elapsed > 15.0) {
+                timed_out = true;
+                break;
+            }
+
+            sock_ssize_t bytes_read =
+                recv(client_fd, chunk.data(), static_cast<recv_len_t>(chunk.size()), 0);
+            if (bytes_read <= 0) {
+                break;
+            }
+            raw_request.append(chunk.data(), static_cast<size_t>(bytes_read));
+
+            if (!headers_complete) {
+                size_t sep = raw_request.find("\r\n\r\n");
+                if (sep != std::string::npos) {
+                    headers_complete = true;
+                    size_t body_start = sep + 4;
+                    // Check for Content-Length
+                    size_t cl_pos = raw_request.find("Content-Length:");
+                    if (cl_pos == std::string::npos) {
+                        cl_pos = raw_request.find("content-length:");
+                    }
+                    if (cl_pos != std::string::npos && cl_pos < sep) {
+                        size_t val_s = raw_request.find_first_not_of(" \t", cl_pos + 15);
+                        size_t val_e = raw_request.find("\r\n", val_s);
+                        try {
+                            size_t cl = std::stoul(raw_request.substr(val_s, val_e - val_s));
+                            expected_total_size = body_start + cl;
+                        } catch (...) {
+                            expected_total_size = body_start;
+                        }
+                    } else {
+                        expected_total_size = body_start;
+                    }
+                }
+            }
+
+            if (headers_complete && raw_request.size() >= expected_total_size) {
+                break;
+            }
+        }
+
+        if (timed_out) {
+            HttpResponse resp{.status_code = 408,
+                              .status_text = "Request Timeout",
+                              .body = "{\"error\": \"Request framing timeout (15s limit)\"}"};
+            std::string raw_resp = resp.to_http_string();
+            send(client_fd, raw_resp.data(), static_cast<send_len_t>(raw_resp.size()), 0);
+        } else if (!raw_request.empty()) {
+            HttpRequest req = parse_request(raw_request);
+            HttpResponse resp = handle_request(req);
+
+            // Gzip compression check
+            bool client_accepts_gzip = false;
+            auto it = req.headers.find("accept-encoding");
+            if (it == req.headers.end()) {
+                it = req.headers.find("Accept-Encoding");
+            }
+            if (it != req.headers.end() && it->second.find("gzip") != std::string::npos) {
+                client_accepts_gzip = true;
+            }
+
+            if (client_accepts_gzip && req.method != "HEAD" && resp.body.size() > 1024) {
+                std::string compressed = gzip_compress(resp.body);
+                if (compressed.size() < resp.body.size()) {
+                    resp.body = std::move(compressed);
+                    resp.headers.push_back({"Content-Encoding", "gzip"});
+                    resp.headers.push_back({"Vary", "Accept-Encoding"});
+                }
+            }
+
+            std::string raw_resp = resp.to_http_string();
+            size_t total_sent = 0;
+            while (total_sent < raw_resp.size()) {
+                sock_ssize_t sent = send(client_fd, raw_resp.data() + total_sent,
+                                         static_cast<send_len_t>(raw_resp.size() - total_sent), 0);
+                if (sent <= 0) break;
+                total_sent += static_cast<size_t>(sent);
+            }
+        }
+
+#if defined(_WIN32) || defined(_WIN64)
+        shutdown(client_fd, SD_BOTH);
+        closesocket(client_fd);
+#else
+        shutdown(client_fd, SHUT_RDWR);
+        close(client_fd);
+#endif
+    }
 }
 
 HttpResponse HttpServer::handle_request(const HttpRequest& req) const {
@@ -616,8 +796,7 @@ void HttpServer::start() {
 
     int opt = 1;
 #if defined(_WIN32) || defined(_WIN64)
-    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&opt),
-               sizeof(opt));
+    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&opt), sizeof(opt));
 #else
     setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 #endif
@@ -634,8 +813,7 @@ void HttpServer::start() {
         }
     }
 
-    if (bind(listen_fd, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) ==
-        SOCK_ERR) {
+    if (bind(listen_fd, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) == SOCK_ERR) {
         std::cerr << "Failed to bind to " << host_ << ":" << port_ << std::endl;
 #if defined(_WIN32) || defined(_WIN64)
         closesocket(listen_fd);
@@ -657,28 +835,40 @@ void HttpServer::start() {
 
     server_socket_ = static_cast<uintptr_t>(listen_fd);
     is_running_.store(true);
+    stop_workers_.store(false);
     start_time_ = std::chrono::steady_clock::now();
 
-    std::cout << "Needlefish search server running on http://" << host_ << ":" << port_
-              << std::endl;
+    // Spawn worker threads
+    workers_.clear();
+    for (size_t i = 0; i < NUM_WORKERS; ++i) {
+        workers_.emplace_back(&HttpServer::worker_loop, this);
+    }
+
+    std::cout << "Needlefish search server running on http://" << host_ << ":" << port_ << std::endl;
     std::cout << "Serving static assets from ./" << static_dir_ << "/" << std::endl;
 
     while (is_running_.load()) {
-        sockaddr_in client_addr{};
-        socklen_t client_len = sizeof(client_addr);
-        socket_t client_fd =
-            accept(listen_fd, reinterpret_cast<sockaddr*>(&client_addr), &client_len);
+        sockaddr_storage client_storage{};
+        socklen_t client_len = sizeof(client_storage);
+        socket_t client_fd = accept(listen_fd, reinterpret_cast<sockaddr*>(&client_storage), &client_len);
         if (client_fd == INVALID_SOCK) {
-            if (!is_running_.load())
-                break;
+            if (!is_running_.load()) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
 
-        char client_ip[INET_ADDRSTRLEN] = "127.0.0.1";
-        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, sizeof(client_ip));
+        // Format client IP for both IPv4 and IPv6
+        char client_ip[INET6_ADDRSTRLEN] = "127.0.0.1";
+        if (client_storage.ss_family == AF_INET6) {
+            auto* s6 = reinterpret_cast<sockaddr_in6*>(&client_storage);
+            inet_ntop(AF_INET6, &s6->sin6_addr, client_ip, sizeof(client_ip));
+        } else {
+            auto* s4 = reinterpret_cast<sockaddr_in*>(&client_storage);
+            inet_ntop(AF_INET, &s4->sin_addr, client_ip, sizeof(client_ip));
+        }
         std::string ip_str(client_ip);
 
+        // Rate limit check
         if (!g_rate_limiter.allow(ip_str)) {
             HttpResponse resp{.status_code = 429,
                               .status_text = "Too Many Requests",
@@ -695,98 +885,67 @@ void HttpServer::start() {
             continue;
         }
 
+        // Enqueue to worker pool
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            if (task_queue_.size() >= MAX_QUEUE_SIZE) {
+                // Saturated -> return 503 and close
+                HttpResponse resp{.status_code = 503,
+                                  .status_text = "Service Unavailable",
+                                  .body = "{\"error\": \"Server worker queue full.\"}"};
+                std::string raw_resp = resp.to_http_string();
+                send(client_fd, raw_resp.data(), static_cast<send_len_t>(raw_resp.size()), 0);
 #if defined(_WIN32) || defined(_WIN64)
-        DWORD timeout_ms = 5000;
-        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout_ms),
-                   sizeof(timeout_ms));
-        setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout_ms),
-                   sizeof(timeout_ms));
+                shutdown(client_fd, SD_BOTH);
+                closesocket(client_fd);
 #else
-        struct timeval tv;
-        tv.tv_sec = 5;
-        tv.tv_usec = 0;
-        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+                shutdown(client_fd, SHUT_RDWR);
+                close(client_fd);
 #endif
-
-        // Framing loop: read until headers and Content-Length body are received
-        std::string raw_request;
-        raw_request.reserve(4096);
-        std::array<char, 2048> chunk{};
-        size_t expected_total_size = 0;
-        bool headers_complete = false;
-
-        while (raw_request.size() < 65536) {
-            sock_ssize_t bytes_read =
-                recv(client_fd, chunk.data(), static_cast<recv_len_t>(chunk.size()), 0);
-            if (bytes_read <= 0) {
-                break;
+                continue;
             }
-            raw_request.append(chunk.data(), static_cast<size_t>(bytes_read));
-
-            if (!headers_complete) {
-                size_t sep = raw_request.find("\r\n\r\n");
-                if (sep != std::string::npos) {
-                    headers_complete = true;
-                    size_t body_start = sep + 4;
-                    // Check for Content-Length
-                    size_t cl_pos = raw_request.find("Content-Length:");
-                    if (cl_pos == std::string::npos) {
-                        cl_pos = raw_request.find("content-length:");
-                    }
-                    if (cl_pos != std::string::npos && cl_pos < sep) {
-                        size_t val_s = raw_request.find_first_not_of(" \t", cl_pos + 15);
-                        size_t val_e = raw_request.find("\r\n", val_s);
-                        try {
-                            size_t cl = std::stoul(raw_request.substr(val_s, val_e - val_s));
-                            expected_total_size = body_start + cl;
-                        } catch (...) {
-                            expected_total_size = body_start;
-                        }
-                    } else {
-                        expected_total_size = body_start;
-                    }
-                }
-            }
-
-            if (headers_complete && raw_request.size() >= expected_total_size) {
-                break;
-            }
+            task_queue_.push(static_cast<uintptr_t>(client_fd));
+            queue_cv_.notify_one();
         }
-
-        if (!raw_request.empty()) {
-            HttpRequest req = parse_request(raw_request);
-            HttpResponse resp = handle_request(req);
-            std::string raw_resp = resp.to_http_string();
-            size_t total_sent = 0;
-            while (total_sent < raw_resp.size()) {
-                sock_ssize_t sent = send(client_fd, raw_resp.data() + total_sent,
-                                         static_cast<send_len_t>(raw_resp.size() - total_sent), 0);
-                if (sent <= 0)
-                    break;
-                total_sent += static_cast<size_t>(sent);
-            }
-        }
-
-#if defined(_WIN32) || defined(_WIN64)
-        shutdown(client_fd, SD_BOTH);
-        closesocket(client_fd);
-#else
-        shutdown(client_fd, SHUT_RDWR);
-        close(client_fd);
-#endif
     }
 }
 
 void HttpServer::stop() {
-    if (server_socket_ != static_cast<uintptr_t>(INVALID_SOCK)) {
-        is_running_.store(false);
+    if (is_running_.exchange(false)) {
+        stop_workers_.store(true);
+        if (server_socket_ != static_cast<uintptr_t>(INVALID_SOCK)) {
 #if defined(_WIN32) || defined(_WIN64)
-        closesocket(static_cast<socket_t>(server_socket_));
+            closesocket(static_cast<socket_t>(server_socket_));
 #else
-        close(static_cast<socket_t>(server_socket_));
+            close(static_cast<socket_t>(server_socket_));
 #endif
-        server_socket_ = static_cast<uintptr_t>(INVALID_SOCK);
+            server_socket_ = static_cast<uintptr_t>(INVALID_SOCK);
+        }
+
+        // Drain any pending queue tasks and notify all workers
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            while (!task_queue_.empty()) {
+                uintptr_t s = task_queue_.front();
+                task_queue_.pop();
+                socket_t c_fd = static_cast<socket_t>(s);
+#if defined(_WIN32) || defined(_WIN64)
+                shutdown(c_fd, SD_BOTH);
+                closesocket(c_fd);
+#else
+                shutdown(c_fd, SHUT_RDWR);
+                close(c_fd);
+#endif
+            }
+            queue_cv_.notify_all();
+        }
+
+        for (auto& w : workers_) {
+            if (w.joinable()) {
+                w.join();
+            }
+        }
+        workers_.clear();
     }
 }
 

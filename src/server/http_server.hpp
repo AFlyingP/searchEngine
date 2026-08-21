@@ -2,12 +2,17 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <list>
 #include <memory>
+#include <mutex>
+#include <queue>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -38,7 +43,7 @@ struct HttpResponse {
 /**
  * @brief Zero-external-dependency embedded HTTP 1.1 server.
  * Supports cross-platform POSIX and Win32 sockets, routing REST APIs
- * and serving static UI assets.
+ * and serving static UI assets with multi-threaded worker pool.
  */
 class HttpServer {
   public:
@@ -63,12 +68,12 @@ class HttpServer {
     static HttpRequest parse_request(std::string_view raw_request);
 
     /**
-     * @brief Start listening and handling requests synchronously.
+     * @brief Start listening and handling requests.
      */
     void start();
 
     /**
-     * @brief Stop the server.
+     * @brief Stop the server and drain/join worker threads.
      */
     void stop();
 
@@ -83,14 +88,25 @@ class HttpServer {
     [[nodiscard]] HttpResponse handle_api_health(const HttpRequest& req) const;
     [[nodiscard]] HttpResponse handle_static_file(std::string_view path) const;
 
+    void worker_loop();
+
     IndexView& index_;
     mutable HybridSearchEngine engine_;
     std::string host_;
     uint16_t port_;
     std::string static_dir_{"web"};
     std::atomic<bool> is_running_{false};
+    std::atomic<bool> stop_workers_{false};
     uintptr_t server_socket_{static_cast<uintptr_t>(~0ULL)};
     std::chrono::steady_clock::time_point start_time_{std::chrono::steady_clock::now()};
+
+    // Thread pool & bounded task queue
+    static constexpr size_t NUM_WORKERS = 8;
+    static constexpr size_t MAX_QUEUE_SIZE = 128;
+    std::vector<std::thread> workers_;
+    std::queue<uintptr_t> task_queue_;
+    std::mutex queue_mutex_;
+    std::condition_variable queue_cv_;
 };
 
 }  // namespace needlefish

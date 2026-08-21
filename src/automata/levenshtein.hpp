@@ -17,7 +17,7 @@ struct FuzzyMatch {
 };
 
 /**
- * @brief Universal Levenshtein Automaton (Schulz & Mihov 2002).
+ * @brief Levenshtein DP-Row Automaton.
  * Operates at edit distance k in {1, 2} and directly intersects with the contiguous RadixTrie.
  */
 class LevenshteinAutomaton {

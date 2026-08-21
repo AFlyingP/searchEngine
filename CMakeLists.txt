@@ -22,6 +22,17 @@ option(BUILD_TESTS "Build test suite" ON)
 option(BUILD_BENCHMARKS "Build benchmark suite" ON)
 option(BUILD_FUZZERS "Build fuzz targets" ON)
 
+# Third-party zlib for HTTP gzip compression
+include(FetchContent)
+set(FETCHCONTENT_QUIET ON)
+set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    zlib
+    URL https://github.com/madler/zlib/archive/refs/tags/v1.3.1.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(zlib)
+
 # Core library
 add_library(needlefish_core
     src/bitvector/bitvector.cpp
@@ -46,6 +57,8 @@ add_library(needlefish_core
     src/automata/autocomplete.cpp
     src/server/http_server.cpp
 )
+
+target_link_libraries(needlefish_core PRIVATE $<BUILD_INTERFACE:zlibstatic>)
 
 if (WIN32)
     target_link_libraries(needlefish_core PUBLIC ws2_32)

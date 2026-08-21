@@ -40,7 +40,7 @@
   7. Final induced sorting from $SA_1$.
 - **Index Widths**:
   - Automatic runtime selection: 32-bit (`int32_t`) for $n < 2^{31}$, 64-bit (`int64_t`) otherwise.
-  - Working memory: $\le 6n$ bytes in 32-bit mode.
+  - Working memory: $\sim 8n\text{--}9n$ bytes in 32-bit mode.
 - **Complexity**: strictly $O(n)$ time and $O(n)$ space.
 
 ### 1.4 FM-Index & Burrows-Wheeler Transform (`needlefish::FMIndex`)
@@ -70,17 +70,10 @@
 - **Porter Stemmer**: Strict C++20 implementation of Martin Porter's 1980 algorithm passing all 23,531 official published test vectors (`voc.txt` $\to$ `output.txt`).
 - **Stopwords**: Configurable filter with English defaults.
 
-### 2.2 Posting List Compression & Block Structure (`needlefish::PostingListWriter` / `PostingListReader`)
-- **Block Size**: 128 docIDs per block.
-- **DocID Compression**: Frame-Of-Reference (FOR) bit-width packing with delta encoding. Decodes at **> 1.36 Billion postings/s**.
-- **Term Frequencies**: 7-bit continuation Variable-Byte (VByte).
-- **Positions**: Delta-encoded VByte stream stored in a dedicated positions section (only loaded for phrase queries).
-- **Block Header**:
-  ```
-  +----------------------+--------------------------+--------------------+--------------------+-----------------------+---------------------+
-  | max_doc_id (uint32)  | block_max_score (float)  | num_docs (uint16)  | bit_width (uint8)  | pos_offset (uint32)   | pos_bytes (uint32)  |
-  +----------------------+--------------------------+--------------------+--------------------+-----------------------+---------------------+
-  ```
+### 2.2 Inverted Index Builder Architecture (`needlefish::IndexBuilder`)
+- **Single-Segment In-Memory Build**: Documents accumulate in-memory into contiguous stored field buffers and std::map postings before serializing into a unified, immutable single-file `.idx` container.
+- **Posting Compression**: Postings are grouped into 128-docID blocks. DocID deltas are bit-packed using Frame-of-Reference (FOR) bit-packing at bit widths `0..32` with SSE2 vector acceleration and scalar fallback.
+- **Term Frequencies & Positions**: Term frequencies are compressed using 7-bit continuation Variable-Byte (VByte). Positions are delta-encoded and packed with VByte into a dedicated section.
 
 ### 2.3 Contiguous Flattened Radix Trie (`needlefish::RadixTrie`)
 - **Memory Representation**: Stored in a single flat array of 32-byte `RadixNode` structures with zero heap pointer chasing.
@@ -88,19 +81,17 @@
   - `edge_offset` & `edge_len`: Offset and length in contiguous string pool buffer.
   - `first_child` & `next_sibling`: 32-bit indices into the flat node array.
   - `TermPayload`: Term ID, document frequency, postings byte offset, postings byte length, max BM25 score.
-- **Capabilities**:
-  - Exact term lookup in $O(m)$ time.
-  - Search-as-you-type prefix search.
-  - DFA / Automaton lockstep DFS traversal for Levenshtein / fuzzy search.
+- **Validation**: Deserializer strictly enforces non-zero node count (rootless trie rejection), string pool range bounds, and 3-color DFS tree acyclicity.
 
 ### 2.4 Query Evaluation & Block-Max WAND (`needlefish::QueryEvaluator`)
 - **BM25 Scoring**:
   $$score(D, Q) = \sum_{t \in Q} \ln\left(1 + \frac{N - n(t) + 0.5}{n(t) + 0.5}\right) \cdot \frac{f(t, D) \cdot (k_1 + 1)}{f(t, D) + k_1 \cdot (1 - b + b \cdot \frac{|D|}{\text{avgdl}})}$$
-  (Default parameters: $k_1 = 0.9$, $b = 0.4$).
-- **Block-Max WAND (Weak AND)**: Dynamic pruning for disjunctive top-$k$ min-heap queries. Computes accumulated block-max scores to pivot and skip entire non-matching doc blocks without decoding posting deltas.
-- **Galloping AND Conjunction**: Exponential search on posting lists for exact multi-term intersection.
-- **Positional Phrase Queries**: Consecutive token position verification ($p_{i+1} = p_i + 1$).
-- **Snippet Generator**: Best-window sentence selector with HTML query term markers (`<em>term</em>`).
+  (Default parameters: $k_1 = 0.9$, $b = 0.4$). Parameter verification strictly enforced at evaluation initialization.
+- **Query Semantics**:
+  - Bare multi-word queries (`information retrieval`) evaluate as boolean AND conjunctions by default.
+  - Explicit `OR` queries (`cuda OR io_uring`) route to Block-Max WAND disjunction.
+  - Negated terms (`-term`) evaluate via stateless full sorted docID binary search with candidate over-fetching.
+- **Tie-Breaking Order**: Canonical score descending, `doc_id` ascending across all heaps and result lists.
 
 ### 2.5 Memory-Mapped `.idx` Binary File Layout
 
@@ -109,7 +100,7 @@ All sections are strictly 64-byte aligned for zero-copy direct mapping:
 ```
 +---------------------------------------------------------------------------------------------------+
 | INDEX HEADER (64 bytes aligned)                                                                   |
-|   Magic ("NFLSHIDX", 8B) | Version (u32) | NumSections (u32) | TotalFileSize (u64)                |
+|   Magic ("NFLSHIDX", 8B) | Version (u32, v2) | NumSections (u32) | TotalFileSize (u64)            |
 +---------------------------------------------------------------------------------------------------+
 | SECTION TABLE                                                                                     |
 |   [Section 1: Stats]         Offset (u64) | Length (u64) | CRC32 (u32)                            |
@@ -121,7 +112,7 @@ All sections are strictly 64-byte aligned for zero-copy direct mapping:
 |   [Section 7: FMIndex]       Offset (u64) | Length (u64) | CRC32 (u32)                            |
 +---------------------------------------------------------------------------------------------------+
 | SECTION 1: BM25 STATS (64-byte aligned)                                                           |
-|   total_docs (u32) | total_tokens (u64) | avg_doc_len (double)                                    |
+|   total_docs (u32) | total_tokens (u64) | avg_doc_len (double) | k1 (float) | b (float)           |
 +---------------------------------------------------------------------------------------------------+
 | SECTION 2: DOC METADATA (64-byte aligned)                                                         |
 |   Array of DocMetadataRecord { doc_id, token_count, title_offset, title_len, text_offset, ... }   |
@@ -146,26 +137,20 @@ All sections are strictly 64-byte aligned for zero-copy direct mapping:
 
 ### 3.1 Regular Expression Engine (`needlefish::Regex`)
 - **AST Parser**: Recursive-descent parser for literals, wildcards `.`, character classes `[a-z]`, `[^0-9]`, escapes `\d`, `\w`, `\s`, repetitions `*`, `+`, `?`, and quantifiers `{n,m}`.
-- **Thompson NFA Construction**: Converts AST into non-deterministic state graph with $\epsilon$-transitions.
-- **On-the-Fly Powerset DFA**: Byte-level transition caching with a 256-entry transition table per state.
+- **Thompson NFA Construction**: Converts AST into non-deterministic state graph with $\epsilon$-transitions with state explosion limits ($\le 2048$ states).
+- **Iterative BFS DFA Construction**: Generates deterministic state transition table iteratively via BFS worklist without recursive stack growth. Thread-safe execution under shared mutex.
 - **Guaranteed $O(n)$ Runtime**: Deterministic state transitions ensure linear-time scanning with zero catastrophic backtracking.
 
-### 3.2 Universal Levenshtein Automata (`needlefish::LevenshteinAutomaton`)
-- **Parametric State Representation**: Schulz & Mihov (2002) state vectors over prefix edit distances for $k \in \{1, 2\}$.
-- **Radix Trie Lockstep Traversal**: Traverses `RadixTrie` nodes in lockstep with DFA state transitions, pruning non-matching subtrees immediately.
-- **Latency**: Intersects 50,000+ terms in **< 3 ms**.
+### 3.2 Levenshtein DP-Row Automaton (`needlefish::LevenshteinAutomaton`)
+- **DP-Row State Representation**: State vectors over prefix edit distances for edit distances $k \in \{1, 2\}$.
+- **Radix Trie Lockstep Traversal**: Traverses `RadixTrie` nodes in lockstep with automaton state transitions, pruning non-matching subtrees immediately.
 
-### 3.3 Autocomplete & Suggestion Engine (`needlefish::AutocompleteEngine`)
-- **Prefix Suggestions**: Instant search-as-you-type prefix completions ranked by document frequency.
-- **Fuzzy Corrections**: Typo suggestions with distance-weighted frequency scoring.
-- **"Did you mean?"**: Automatic spell-check corrections for out-of-vocabulary terms.
-
-### 3.4 Hybrid Search Engine (`needlefish::HybridSearchEngine`)
-- **Intelligent Query Routing**:
-  - Regular expressions `/pattern/` $\to$ `needlefish::Regex` text scanner.
-  - Substring / Infix matching $\to$ `needlefish::FMIndex` locate queries.
-  - Typo queries `term~k` $\to$ Levenshtein Automaton term expansion $\to$ Block-Max WAND.
-  - Standard queries $\to$ Okapi BM25 with Block-Max WAND dynamic pruning.
+### 3.3 HTTP Server Architecture (`needlefish::HttpServer`)
+- **Worker Thread Pool**: 8 worker threads with a bounded task queue (capacity 128 connections, 503 on saturation).
+- **End-to-End Socket Ownership**: Worker threads own client sockets end-to-end (framing $\to$ handle $\to$ send $\to$ close).
+- **Framing Deadline**: Wall-clock deadline (15 seconds total) across recv loop, responding 408 on timeout.
+- **Gzip Compression**: FetchContent zlib (v1.3.1) linked only to the server/CLI target for automatic gzip compression on responses $> 1024$ bytes. Core library remains strictly zero-dependency.
+- **Rate Limiter**: Token-bucket rate limiter with IPv6 address parsing and LRU eviction capped at 10,000 IPs.
 
 ---
 

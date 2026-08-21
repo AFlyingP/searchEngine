@@ -135,6 +135,9 @@ void RadixTrie::insert(std::string_view key, const TermPayload& payload) {
 }
 
 TermPayload RadixTrie::lookup(std::string_view key) const noexcept {
+    if (nodes_.empty()) {
+        return TermPayload{};
+    }
     if (key.empty()) {
         if ((nodes_[0].flags & 1) != 0) {
             return nodes_[0].payload;
@@ -326,13 +329,15 @@ RadixTrie RadixTrie::deserialize(std::istream& is) {
         throw std::runtime_error("Failed to read RadixTrie header");
     }
 
+    if (num_n == 0) {
+        throw std::runtime_error("Corrupted RadixTrie: trie contains 0 nodes (rootless)");
+    }
+
     trie.num_terms_ = static_cast<size_t>(num_t);
     trie.nodes_.resize(static_cast<size_t>(num_n));
-    if (num_n > 0) {
-        if (!is.read(reinterpret_cast<char*>(trie.nodes_.data()),
-                     static_cast<std::streamsize>(num_n * sizeof(RadixNode)))) {
-            throw std::runtime_error("Failed to read RadixTrie nodes");
-        }
+    if (!is.read(reinterpret_cast<char*>(trie.nodes_.data()),
+                 static_cast<std::streamsize>(num_n * sizeof(RadixNode)))) {
+        throw std::runtime_error("Failed to read RadixTrie nodes");
     }
 
     trie.pool_.resize(static_cast<size_t>(pool_sz));
@@ -365,6 +370,26 @@ RadixTrie RadixTrie::deserialize(std::istream& is) {
                                      std::to_string(i));
         }
     }
+
+    // Enforce tree acyclicity via 3-color DFS traversal
+    std::vector<uint8_t> color(trie.nodes_.size(), 0);  // 0 = white, 1 = gray, 2 = black
+    auto dfs_check = [&](auto& self, uint32_t u) -> void {
+        color[u] = 1;
+        uint32_t child = trie.nodes_[u].first_child;
+        while (child != 0) {
+            if (color[child] == 1) {
+                throw std::runtime_error("Corrupted RadixTrie: cycle detected involving node " +
+                                         std::to_string(child));
+            }
+            if (color[child] == 0) {
+                self(self, child);
+            }
+            child = trie.nodes_[child].next_sibling;
+        }
+        color[u] = 2;
+    };
+
+    dfs_check(dfs_check, 0);
 
     return trie;
 }

@@ -75,7 +75,7 @@ Tested on **Simple English Wikipedia** (271,979 documents, 685.18 MB indexed cor
 | **Language** | C++20 | Java | Rust | Rust |
 | **Runtime Dependencies** | None (0 MB) | JVM | None | None |
 | **Substring Search** | Hand-crafted FM-Index (SA-IS + Wavelet) | Trigram | Trigram | Trigram |
-| **Fuzzy / Typo Search** | Schulz-Mihov DFA $\cap$ Flattened Trie | Levenshtein Automata | FST Automata | Levenshtein DFA |
+| **Fuzzy / Typo Search** | Levenshtein DP-Row Automaton $\cap$ Flattened Trie | Levenshtein Automata | FST Automata | Levenshtein DFA |
 | **Ranking Pruning** | Block-Max WAND | Block-Max WAND | Block-Max WAND | Bucket Sorting |
 | **Index Format** | Single-file zero-copy mmap (`.idx`) | Segment Directory | Segment Directory | LMDB KV Store |
 
@@ -87,33 +87,36 @@ Tested on **Simple English Wikipedia** (271,979 documents, 685.18 MB indexed cor
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target needlefish_cli needlefish_c
+cmake --build build --target needlefish needlefish_c
 ```
 
 ### 2. Index a JSONL Corpus
 
 ```bash
 # Ingest documents and produce memory-mapped .idx file
-./build/needlefish index --input corpus.jsonl --output corpus.idx --enable-fm
+./build/bin/needlefish index --input corpus.jsonl --output corpus.idx --enable-fm
 ```
 
 ### 3. Query from the CLI
 
 ```bash
-# Term search
-./build/needlefish search --index corpus.idx --query "information retrieval"
+# Term search (bare terms default to boolean AND conjunction)
+./build/bin/needlefish search --index corpus.idx --query "information retrieval"
+
+# Scored boolean OR disjunction
+./build/bin/needlefish search --index corpus.idx --query "cuda OR io_uring"
 
 # Exact phrase search
-./build/needlefish search --index corpus.idx --query "\"operating system\""
+./build/bin/needlefish search --index corpus.idx --query "\"operating system\""
 
 # Fuzzy typo correction
-./build/needlefish search --index corpus.idx --query "relativty~1"
+./build/bin/needlefish search --index corpus.idx --query "relativty~1"
 ```
 
 ### 4. Run HTTP REST API Server
 
 ```bash
-./build/needlefish serve --index corpus.idx --port 8080 --static web/
+./build/bin/needlefish serve --index corpus.idx --port 8080 --web-dir web/
 ```
 
 Access the interactive web dashboard at `http://localhost:8080`.
@@ -148,19 +151,18 @@ int main() {
 ```python
 from bindings.python.needlefish import NeedlefishIndex
 
-engine = NeedlefishIndex("corpus.idx")
-results = engine.search("quantum computing", top_k=5)
-
-for hit in results["hits"]:
-    print(f"[{hit['doc_id']}] {hit['title']} (Score: {hit['score']:.2f})")
-    print(f"    {hit['snippet']}")
+with NeedlefishIndex("corpus.idx") as engine:
+    results = engine.search("quantum computing", top_k=5)
+    for hit in results["hits"]:
+        print(f"[{hit['doc_id']}] {hit['title']} (Score: {hit['score']:.2f})")
+        print(f"    {hit['snippet']}")
 ```
 
 ---
 
 ## REST API Specification
 
-### 1. `GET /api/search?q=<query>&k=<top_k>`
+### 1. `GET /api/search?q=<query>&k=<top_k>&fuzzy=<true|false>`
 Executes ranked search with term, phrase, boolean, and fuzzy routing:
 ```json
 {
@@ -168,7 +170,7 @@ Executes ranked search with term, phrase, boolean, and fuzzy routing:
   "total_estimate": 142,
   "hits": [
     {
-      "doc_id": 51828,
+      "id": 51828,
       "score": 19.09,
       "title": "Quantum computer",
       "snippet": "...building block of <em>quantum</em> <em>computers</em>..."
@@ -178,23 +180,44 @@ Executes ranked search with term, phrase, boolean, and fuzzy routing:
 ```
 
 ### 2. `GET /api/suggest?prefix=<prefix>&k=<count>`
-Returns instant search-as-you-type prefix completions:
+Returns instant search-as-you-type completions:
 ```json
 {
-  "prefix": "algo",
-  "suggestions": ["algorithm", "algorithmic", "algorithms"]
+  "took_us": 28,
+  "suggestions": [
+    {
+      "term": "algorithm",
+      "doc_freq": 1420,
+      "edit_distance": 0
+    }
+  ]
 }
 ```
 
 ### 3. `GET /api/stats`
-Returns index metadata and memory footprint:
+Returns index metadata and statistics:
 ```json
 {
   "total_docs": 271979,
   "total_tokens": 34972108,
-  "avg_doc_len": 128.58,
+  "avg_doc_length": 128.58,
+  "unique_terms": 834149,
+  "trie_nodes": 1205312,
+  "has_fm_index": true,
   "file_size_bytes": 718452104,
-  "has_fm_index": true
+  "bm25": {"k1": 0.9, "b": 0.4}
+}
+```
+
+### 4. `GET /api/health`
+Returns service health and index integrity digest:
+```json
+{
+  "status": "healthy",
+  "version": "1.0.0",
+  "index_checksum": 18492810,
+  "total_docs": 271979,
+  "uptime_seconds": 120
 }
 ```
 

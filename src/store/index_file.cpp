@@ -79,11 +79,13 @@ void IndexView::parse_sections(std::span<const uint8_t> data) {
 
         std::span<const uint8_t> sec_data(data.data() + sec.offset, sec.length);
 
-        // Validate section checksum
-        const uint32_t actual_crc = compute_crc32(sec_data);
-        if (sec.checksum != 0 && actual_crc != sec.checksum) {
-            throw std::runtime_error("Corrupted index: checksum mismatch in section " +
-                                     std::to_string(sec.section_id));
+        // Validate section checksum (skip only if section length is 0)
+        if (sec.length > 0) {
+            const uint32_t actual_crc = compute_crc32(sec_data);
+            if (actual_crc != sec.checksum) {
+                throw std::runtime_error("Corrupted index: checksum mismatch in section " +
+                                         std::to_string(sec.section_id));
+            }
         }
 
         switch (static_cast<SectionId>(sec.section_id)) {

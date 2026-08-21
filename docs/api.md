@@ -10,27 +10,22 @@ Needlefish provides multiple programmatic and network interfaces:
 
 ## 1. HTTP REST API
 
-The HTTP server runs on port 8080 by default (`needlefish serve --index corpus.idx --port 8080`).
+The HTTP server runs on port 8080 by default (`needlefish serve --index corpus.idx --port 8080 --web-dir web/`).
 
 ### `GET /api/search`
 Execute BM25, phrase, regex, or fuzzy queries.
 - **Parameters**:
-  - `q` (string): Query string (max 256 characters).
-  - `limit` (integer, optional): Maximum hits to return (default: 10).
-  - `mode` (string, optional): `"standard"`, `"phrase"`, `"fuzzy"`, `"regex"`, `"substring"`, `"auto"`.
+  - `q` (string): Query string (e.g. `information retrieval`, `"exact phrase"`, `quantum -physics`, `/pattern/`).
+  - `k` (integer, optional): Maximum hits to return (default: 10).
+  - `fuzzy` (boolean, optional): Set `true` to enable automatic fuzzy fallback.
 - **Response**:
 ```json
 {
-  "query": "quantum computing",
-  "mode": "standard",
   "took_us": 142,
-  "took_ms": 0.142,
-  "total_hits": 5,
-  "did_you_mean": "",
+  "total_estimate": 5,
   "hits": [
     {
-      "rank": 1,
-      "doc_id": 42,
+      "id": 42,
       "score": 8.4123,
       "title": "Quantum Computing",
       "snippet": "Introduction to <em>quantum</em> <em>computing</em> algorithms..."
@@ -42,19 +37,49 @@ Execute BM25, phrase, regex, or fuzzy queries.
 ### `GET /api/suggest`
 Retrieve prefix or fuzzy autocomplete term suggestions.
 - **Parameters**:
-  - `q` (string): Prefix string.
-  - `limit` (integer, optional): Maximum suggestions (default: 10).
+  - `prefix` (string): Prefix string (e.g. `algo`).
+  - `k` (integer, optional): Maximum suggestions (default: 10).
   - `fuzzy` (boolean, optional): Set `true` for fuzzy matching.
+  - `max_dist` (integer, optional): Maximum edit distance (1 or 2, default: 2).
+- **Response**:
+```json
+{
+  "took_us": 28,
+  "suggestions": [
+    {
+      "term": "algorithm",
+      "doc_freq": 1420,
+      "edit_distance": 0
+    }
+  ]
+}
+```
+
+### `GET /api/stats`
+Retrieve index metadata and statistics.
+- **Response**:
+```json
+{
+  "total_docs": 271979,
+  "total_tokens": 34972108,
+  "avg_doc_length": 128.58,
+  "unique_terms": 834149,
+  "trie_nodes": 1205312,
+  "has_fm_index": true,
+  "file_size_bytes": 718452104,
+  "bm25": {"k1": 0.9, "b": 0.4}
+}
+```
 
 ### `GET /api/health`
 Health check and metadata endpoint.
 - **Response**:
 ```json
 {
-  "status": "ok",
+  "status": "healthy",
   "version": "1.0.0",
-  "total_docs": 100000,
-  "index_checksum": "0x89abcdef",
+  "index_checksum": 18492810,
+  "total_docs": 271979,
   "uptime_seconds": 120
 }
 ```

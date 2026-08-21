@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -98,7 +99,6 @@ class Regex {
     void add_transition(int from, size_t symbol, int to);
 
     void compute_epsilon_closure(const std::vector<int>& states, std::vector<int>& closure) const;
-    int get_or_create_dfa_state(const std::vector<int>& nfa_set);
 
     std::string pattern_;
     std::shared_ptr<RegexASTNode> ast_;
@@ -114,8 +114,9 @@ class Regex {
         std::array<int, 256> transitions{};
     };
 
-    mutable std::vector<DFAState> dfa_states_;
-    mutable std::unordered_map<std::string, int> nfa_set_to_dfa_;
+    mutable std::mutex dfa_mutex_{};
+    std::vector<DFAState> dfa_states_{};
+    std::unordered_map<std::string, int> nfa_set_to_dfa_{};
 };
 
 }  // namespace needlefish
