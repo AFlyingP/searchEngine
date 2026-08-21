@@ -11,11 +11,11 @@ cmake -B "${BUILD_DIR}" -S "${ROOT_DIR}" -DCMAKE_BUILD_TYPE=Release -DBUILD_BENC
 cmake --build "${BUILD_DIR}" --config Release --target bench_needlefish bench_matrix -j
 
 echo "=== Running Google Benchmark Microbenchmarks ==="
-"${BUILD_DIR}/bench/bench_needlefish"
+"${BUILD_DIR}/bin/bench_needlefish"
 
 if [ -f "${BUILD_DIR}/wikipedia.idx" ]; then
     echo "=== Running Comprehensive Benchmark Matrix ==="
-    "${BUILD_DIR}/bench/bench_matrix" "${BUILD_DIR}/wikipedia.idx"
+    "${BUILD_DIR}/bin/bench_matrix" "${BUILD_DIR}/wikipedia.idx"
 else
     echo "Wikipedia index not found at ${BUILD_DIR}/wikipedia.idx; skipping matrix benchmark."
 fi

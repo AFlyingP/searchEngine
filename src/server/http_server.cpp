@@ -620,7 +620,7 @@ HttpResponse HttpServer::handle_static_file(std::string_view path) const {
 
 void HttpServer::worker_loop() {
     while (!stop_workers_.load()) {
-        uintptr_t sock_val = 0;
+        ClientTask task{};
         {
             std::unique_lock<std::mutex> lock(queue_mutex_);
             queue_cv_.wait(lock, [this]() {
@@ -630,118 +630,133 @@ void HttpServer::worker_loop() {
                 break;
             }
             if (!task_queue_.empty()) {
-                sock_val = task_queue_.front();
+                task = task_queue_.front();
                 task_queue_.pop();
             }
         }
-        if (sock_val == 0) continue;
-        socket_t client_fd = static_cast<socket_t>(sock_val);
+        if (task.socket_val == 0) continue;
+        socket_t client_fd = static_cast<socket_t>(task.socket_val);
 
-        // Worker exclusively owns client_fd end-to-end
+        try {
+            // Worker exclusively owns client_fd end-to-end
 #if defined(_WIN32) || defined(_WIN64)
-        DWORD timeout_ms = 5000;
-        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout_ms),
-                   sizeof(timeout_ms));
-        setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout_ms),
-                   sizeof(timeout_ms));
+            DWORD timeout_ms = 5000;
+            setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout_ms),
+                       sizeof(timeout_ms));
+            setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout_ms),
+                       sizeof(timeout_ms));
 #else
-        struct timeval tv;
-        tv.tv_sec = 5;
-        tv.tv_usec = 0;
-        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+            struct timeval tv;
+            tv.tv_sec = 5;
+            tv.tv_usec = 0;
+            setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 #endif
 
-        auto start_recv_time = std::chrono::steady_clock::now();
-        std::string raw_request;
-        raw_request.reserve(4096);
-        std::array<char, 2048> chunk{};
-        size_t expected_total_size = 0;
-        bool headers_complete = false;
-        bool timed_out = false;
+            auto start_recv_time = std::chrono::steady_clock::now();
+            std::string raw_request;
+            raw_request.reserve(4096);
+            std::array<char, 2048> chunk{};
+            size_t expected_total_size = 0;
+            bool headers_complete = false;
+            bool timed_out = false;
 
-        while (raw_request.size() < 65536) {
-            auto now = std::chrono::steady_clock::now();
-            double total_elapsed = std::chrono::duration<double>(now - start_recv_time).count();
-            if (total_elapsed > 15.0) {
-                timed_out = true;
-                break;
-            }
+            while (raw_request.size() < 65536) {
+                auto now = std::chrono::steady_clock::now();
+                double total_elapsed = std::chrono::duration<double>(now - start_recv_time).count();
+                if (total_elapsed > 15.0) {
+                    timed_out = true;
+                    break;
+                }
 
-            sock_ssize_t bytes_read =
-                recv(client_fd, chunk.data(), static_cast<recv_len_t>(chunk.size()), 0);
-            if (bytes_read <= 0) {
-                break;
-            }
-            raw_request.append(chunk.data(), static_cast<size_t>(bytes_read));
+                sock_ssize_t bytes_read =
+                    recv(client_fd, chunk.data(), static_cast<recv_len_t>(chunk.size()), 0);
+                if (bytes_read <= 0) {
+                    break;
+                }
+                raw_request.append(chunk.data(), static_cast<size_t>(bytes_read));
 
-            if (!headers_complete) {
-                size_t sep = raw_request.find("\r\n\r\n");
-                if (sep != std::string::npos) {
-                    headers_complete = true;
-                    size_t body_start = sep + 4;
-                    // Check for Content-Length
-                    size_t cl_pos = raw_request.find("Content-Length:");
-                    if (cl_pos == std::string::npos) {
-                        cl_pos = raw_request.find("content-length:");
-                    }
-                    if (cl_pos != std::string::npos && cl_pos < sep) {
-                        size_t val_s = raw_request.find_first_not_of(" \t", cl_pos + 15);
-                        size_t val_e = raw_request.find("\r\n", val_s);
-                        try {
-                            size_t cl = std::stoul(raw_request.substr(val_s, val_e - val_s));
-                            expected_total_size = body_start + cl;
-                        } catch (...) {
+                if (!headers_complete) {
+                    size_t sep = raw_request.find("\r\n\r\n");
+                    if (sep != std::string::npos) {
+                        headers_complete = true;
+                        size_t body_start = sep + 4;
+                        // Check for Content-Length
+                        size_t cl_pos = raw_request.find("Content-Length:");
+                        if (cl_pos == std::string::npos) {
+                            cl_pos = raw_request.find("content-length:");
+                        }
+                        if (cl_pos != std::string::npos && cl_pos < sep) {
+                            size_t val_s = raw_request.find_first_not_of(" \t", cl_pos + 15);
+                            size_t val_e = raw_request.find("\r\n", val_s);
+                            try {
+                                size_t cl = std::stoul(raw_request.substr(val_s, val_e - val_s));
+                                expected_total_size = body_start + cl;
+                            } catch (...) {
+                                expected_total_size = body_start;
+                            }
+                        } else {
                             expected_total_size = body_start;
                         }
-                    } else {
-                        expected_total_size = body_start;
+                    }
+                }
+
+                if (headers_complete && raw_request.size() >= expected_total_size) {
+                    break;
+                }
+            }
+
+            if (timed_out) {
+                HttpResponse resp{.status_code = 408,
+                                  .status_text = "Request Timeout",
+                                  .body = "{\"error\": \"Request framing timeout (15s limit)\"}"};
+                std::string raw_resp = resp.to_http_string();
+                send(client_fd, raw_resp.data(), static_cast<send_len_t>(raw_resp.size()), 0);
+            } else if (!raw_request.empty()) {
+                HttpRequest req = parse_request(raw_request);
+
+                // Check rate limit only on query endpoints (exempt static files & health checks)
+                if ((req.path == "/api/search" || req.path == "/api/suggest") &&
+                    !g_rate_limiter.allow(task.client_ip)) {
+                    HttpResponse resp{.status_code = 429,
+                                      .status_text = "Too Many Requests",
+                                      .body = "{\"error\": \"Rate limit exceeded. Maximum 10 QPS allowed.\"}"};
+                    std::string raw_resp = resp.to_http_string();
+                    send(client_fd, raw_resp.data(), static_cast<send_len_t>(raw_resp.size()), 0);
+                } else {
+                    HttpResponse resp = handle_request(req);
+
+                    // Gzip compression check
+                    bool client_accepts_gzip = false;
+                    auto it = req.headers.find("accept-encoding");
+                    if (it == req.headers.end()) {
+                        it = req.headers.find("Accept-Encoding");
+                    }
+                    if (it != req.headers.end() && it->second.find("gzip") != std::string::npos) {
+                        client_accepts_gzip = true;
+                    }
+
+                    if (client_accepts_gzip && req.method != "HEAD" && resp.body.size() > 1024) {
+                        std::string compressed = gzip_compress(resp.body);
+                        if (compressed.size() < resp.body.size()) {
+                            resp.body = std::move(compressed);
+                            resp.headers.push_back({"Content-Encoding", "gzip"});
+                            resp.headers.push_back({"Vary", "Accept-Encoding"});
+                        }
+                    }
+
+                    std::string raw_resp = resp.to_http_string();
+                    size_t total_sent = 0;
+                    while (total_sent < raw_resp.size()) {
+                        sock_ssize_t sent = send(client_fd, raw_resp.data() + total_sent,
+                                                 static_cast<send_len_t>(raw_resp.size() - total_sent), 0);
+                        if (sent <= 0) break;
+                        total_sent += static_cast<size_t>(sent);
                     }
                 }
             }
-
-            if (headers_complete && raw_request.size() >= expected_total_size) {
-                break;
-            }
-        }
-
-        if (timed_out) {
-            HttpResponse resp{.status_code = 408,
-                              .status_text = "Request Timeout",
-                              .body = "{\"error\": \"Request framing timeout (15s limit)\"}"};
-            std::string raw_resp = resp.to_http_string();
-            send(client_fd, raw_resp.data(), static_cast<send_len_t>(raw_resp.size()), 0);
-        } else if (!raw_request.empty()) {
-            HttpRequest req = parse_request(raw_request);
-            HttpResponse resp = handle_request(req);
-
-            // Gzip compression check
-            bool client_accepts_gzip = false;
-            auto it = req.headers.find("accept-encoding");
-            if (it == req.headers.end()) {
-                it = req.headers.find("Accept-Encoding");
-            }
-            if (it != req.headers.end() && it->second.find("gzip") != std::string::npos) {
-                client_accepts_gzip = true;
-            }
-
-            if (client_accepts_gzip && req.method != "HEAD" && resp.body.size() > 1024) {
-                std::string compressed = gzip_compress(resp.body);
-                if (compressed.size() < resp.body.size()) {
-                    resp.body = std::move(compressed);
-                    resp.headers.push_back({"Content-Encoding", "gzip"});
-                    resp.headers.push_back({"Vary", "Accept-Encoding"});
-                }
-            }
-
-            std::string raw_resp = resp.to_http_string();
-            size_t total_sent = 0;
-            while (total_sent < raw_resp.size()) {
-                sock_ssize_t sent = send(client_fd, raw_resp.data() + total_sent,
-                                         static_cast<send_len_t>(raw_resp.size() - total_sent), 0);
-                if (sent <= 0) break;
-                total_sent += static_cast<size_t>(sent);
-            }
+        } catch (...) {
+            // Guarantee exception safety: worker thread never terminates unexpectedly
         }
 
 #if defined(_WIN32) || defined(_WIN64)
@@ -788,7 +803,8 @@ HttpResponse HttpServer::handle_request(const HttpRequest& req) const {
 }
 
 void HttpServer::start() {
-    socket_t listen_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    bool is_ipv6 = (host_.find(':') != std::string::npos);
+    socket_t listen_fd = socket(is_ipv6 ? AF_INET6 : AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listen_fd == INVALID_SOCK) {
         std::cerr << "Failed to create socket." << std::endl;
         return;
@@ -801,26 +817,45 @@ void HttpServer::start() {
     setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 #endif
 
-    sockaddr_in server_addr{};
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port_);
-    if (host_ == "0.0.0.0" || host_ == "*" || host_.empty()) {
-        server_addr.sin_addr.s_addr = INADDR_ANY;
-    } else {
-        if (inet_pton(AF_INET, host_.c_str(), &server_addr.sin_addr) <= 0) {
-            std::cerr << "Invalid host address: " << host_ << ", falling back to 0.0.0.0" << std::endl;
-            server_addr.sin_addr.s_addr = INADDR_ANY;
+    if (is_ipv6) {
+        sockaddr_in6 server_addr6{};
+        server_addr6.sin6_family = AF_INET6;
+        server_addr6.sin6_port = htons(port_);
+        if (host_ == "::" || host_ == "[::]") {
+            server_addr6.sin6_addr = in6addr_any;
+        } else {
+            inet_pton(AF_INET6, host_.c_str(), &server_addr6.sin6_addr);
         }
-    }
-
-    if (bind(listen_fd, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) == SOCK_ERR) {
-        std::cerr << "Failed to bind to " << host_ << ":" << port_ << std::endl;
+        if (bind(listen_fd, reinterpret_cast<sockaddr*>(&server_addr6), sizeof(server_addr6)) == SOCK_ERR) {
+            std::cerr << "Failed to bind to " << host_ << ":" << port_ << std::endl;
 #if defined(_WIN32) || defined(_WIN64)
-        closesocket(listen_fd);
+            closesocket(listen_fd);
 #else
-        close(listen_fd);
+            close(listen_fd);
 #endif
-        return;
+            return;
+        }
+    } else {
+        sockaddr_in server_addr{};
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_port = htons(port_);
+        if (host_ == "0.0.0.0" || host_ == "*" || host_.empty()) {
+            server_addr.sin_addr.s_addr = INADDR_ANY;
+        } else {
+            if (inet_pton(AF_INET, host_.c_str(), &server_addr.sin_addr) <= 0) {
+                std::cerr << "Invalid host address: " << host_ << ", falling back to 0.0.0.0" << std::endl;
+                server_addr.sin_addr.s_addr = INADDR_ANY;
+            }
+        }
+        if (bind(listen_fd, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) == SOCK_ERR) {
+            std::cerr << "Failed to bind to " << host_ << ":" << port_ << std::endl;
+#if defined(_WIN32) || defined(_WIN64)
+            closesocket(listen_fd);
+#else
+            close(listen_fd);
+#endif
+            return;
+        }
     }
 
     if (listen(listen_fd, 64) == SOCK_ERR) {
@@ -868,26 +903,19 @@ void HttpServer::start() {
         }
         std::string ip_str(client_ip);
 
-        // Rate limit check
-        if (!g_rate_limiter.allow(ip_str)) {
-            HttpResponse resp{.status_code = 429,
-                              .status_text = "Too Many Requests",
-                              .body = "{\"error\": \"Rate limit exceeded. Maximum 10 QPS allowed.\"}"};
-            std::string raw_resp = resp.to_http_string();
-            send(client_fd, raw_resp.data(), static_cast<send_len_t>(raw_resp.size()), 0);
-#if defined(_WIN32) || defined(_WIN64)
-            shutdown(client_fd, SD_BOTH);
-            closesocket(client_fd);
-#else
-            shutdown(client_fd, SHUT_RDWR);
-            close(client_fd);
-#endif
-            continue;
-        }
-
         // Enqueue to worker pool
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);
+            if (!is_running_.load() || stop_workers_.load()) {
+#if defined(_WIN32) || defined(_WIN64)
+                shutdown(client_fd, SD_BOTH);
+                closesocket(client_fd);
+#else
+                shutdown(client_fd, SHUT_RDWR);
+                close(client_fd);
+#endif
+                continue;
+            }
             if (task_queue_.size() >= MAX_QUEUE_SIZE) {
                 // Saturated -> return 503 and close
                 HttpResponse resp{.status_code = 503,
@@ -904,7 +932,7 @@ void HttpServer::start() {
 #endif
                 continue;
             }
-            task_queue_.push(static_cast<uintptr_t>(client_fd));
+            task_queue_.push(ClientTask{static_cast<uintptr_t>(client_fd), std::move(ip_str)});
             queue_cv_.notify_one();
         }
     }
@@ -926,9 +954,9 @@ void HttpServer::stop() {
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);
             while (!task_queue_.empty()) {
-                uintptr_t s = task_queue_.front();
+                ClientTask task = task_queue_.front();
                 task_queue_.pop();
-                socket_t c_fd = static_cast<socket_t>(s);
+                socket_t c_fd = static_cast<socket_t>(task.socket_val);
 #if defined(_WIN32) || defined(_WIN64)
                 shutdown(c_fd, SD_BOTH);
                 closesocket(c_fd);

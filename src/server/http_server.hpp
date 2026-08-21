@@ -101,10 +101,14 @@ class HttpServer {
     std::chrono::steady_clock::time_point start_time_{std::chrono::steady_clock::now()};
 
     // Thread pool & bounded task queue
+    struct ClientTask {
+        uintptr_t socket_val{0};
+        std::string client_ip{"127.0.0.1"};
+    };
     static constexpr size_t NUM_WORKERS = 8;
     static constexpr size_t MAX_QUEUE_SIZE = 128;
     std::vector<std::thread> workers_;
-    std::queue<uintptr_t> task_queue_;
+    std::queue<ClientTask> task_queue_;
     std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
 };

@@ -33,7 +33,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(zlib)
 
-# Core library
+# Core library (Zero external dependencies)
 add_library(needlefish_core
     src/bitvector/bitvector.cpp
     src/wavelet/wavelet_tree.cpp
@@ -55,16 +55,24 @@ add_library(needlefish_core
     src/automata/regex.cpp
     src/automata/levenshtein.cpp
     src/automata/autocomplete.cpp
-    src/server/http_server.cpp
 )
 
-target_link_libraries(needlefish_core PRIVATE $<BUILD_INTERFACE:zlibstatic>)
-
-if (WIN32)
-    target_link_libraries(needlefish_core PUBLIC ws2_32)
-endif()
-
 target_include_directories(needlefish_core
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+)
+
+# Server target (HTTP REST API with gzip compression)
+add_library(needlefish_server
+    src/server/http_server.cpp
+)
+target_link_libraries(needlefish_server PUBLIC needlefish_core PRIVATE $<BUILD_INTERFACE:zlibstatic>)
+if (WIN32)
+    target_link_libraries(needlefish_server PUBLIC ws2_32)
+endif()
+target_include_directories(needlefish_server
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -95,23 +103,41 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wshadow
         -Wnon-virtual-dtor
     )
+    target_compile_options(needlefish_server PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+        -Wconversion
+        -Wsign-conversion
+        -Wshadow
+        -Wnon-virtual-dtor
+    )
     if (ENABLE_NATIVE_ARCH)
         target_compile_options(needlefish_core PUBLIC -march=native)
+        target_compile_options(needlefish_server PUBLIC -march=native)
     endif()
     if (ENABLE_SANITIZERS)
         target_compile_options(needlefish_core PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
         target_link_options(needlefish_core PUBLIC -fsanitize=address,undefined)
+        target_compile_options(needlefish_server PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(needlefish_server PUBLIC -fsanitize=address,undefined)
     endif()
     if (ENABLE_TSAN)
         target_compile_options(needlefish_core PUBLIC -fsanitize=thread -fno-omit-frame-pointer)
         target_link_options(needlefish_core PUBLIC -fsanitize=thread)
+        target_compile_options(needlefish_server PUBLIC -fsanitize=thread -fno-omit-frame-pointer)
+        target_link_options(needlefish_server PUBLIC -fsanitize=thread)
     endif()
     if (ENABLE_COVERAGE)
         target_compile_options(needlefish_core PUBLIC -fprofile-instr-generate -fcoverage-mapping)
         target_link_options(needlefish_core PUBLIC -fprofile-instr-generate -fcoverage-mapping)
+        target_compile_options(needlefish_server PUBLIC -fprofile-instr-generate -fcoverage-mapping)
+        target_link_options(needlefish_server PUBLIC -fprofile-instr-generate -fcoverage-mapping)
     endif()
 elseif (MSVC)
     target_compile_options(needlefish_core PRIVATE /W4 /WX /permissive-)
+    target_compile_options(needlefish_server PRIVATE /W4 /WX /permissive-)
 endif()
 
 if (ENABLE_LTO)
@@ -130,13 +156,13 @@ endif()
 add_executable(needlefish_cli
     cli/main.cpp
 )
-target_link_libraries(needlefish_cli PRIVATE needlefish_core)
+target_link_libraries(needlefish_cli PRIVATE needlefish_server needlefish_core)
 set_target_properties(needlefish_cli PROPERTIES OUTPUT_NAME "needlefish")
 
 # Install rules & CMake Package Config
 include(GNUInstallDirs)
 
-install(TARGETS needlefish_core needlefish_c needlefish_cli
+install(TARGETS needlefish_core needlefish_server needlefish_c needlefish_cli
     EXPORT NeedlefishTargets
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

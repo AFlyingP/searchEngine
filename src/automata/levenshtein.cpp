@@ -57,21 +57,6 @@ size_t LevenshteinAutomaton::distance(const State& state) const noexcept {
     return state.back();
 }
 
-namespace {
-struct FuzzyMatchHeapComparator {
-    bool operator()(const FuzzyMatch& a, const FuzzyMatch& b) const noexcept {
-        // Max-heap: worst match is at the top to be popped
-        if (a.distance != b.distance) {
-            return a.distance < b.distance;
-        }
-        if (a.payload.doc_freq != b.payload.doc_freq) {
-            return a.payload.doc_freq > b.payload.doc_freq;
-        }
-        return a.term < b.term;
-    }
-};
-}  // namespace
-
 void LevenshteinAutomaton::dfs_trie(uint32_t node_idx, const State& state,
                                     std::string& current_prefix, const RadixTrie& trie,
                                     std::vector<FuzzyMatch>& matches, size_t max_results) const {

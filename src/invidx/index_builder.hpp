@@ -21,9 +21,9 @@ struct DocumentInput {
 };
 
 /**
- * @brief Inverted Index Builder.
- * Supports streaming documents, memory-budgeted segment accumulation,
- * and immutable single-file .idx output generation.
+ * @brief Single-segment in-memory Inverted Index Builder.
+ * Ingests documents, indexes terms and positions, and serializes
+ * directly into an immutable single-file .idx container.
  */
 class IndexBuilder {
   public:

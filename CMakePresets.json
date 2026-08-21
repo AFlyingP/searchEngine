@@ -106,6 +106,13 @@
       "output": {
         "outputOnFailure": true
       }
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan",
+      "output": {
+        "outputOnFailure": true
+      }
     }
   ]
 }

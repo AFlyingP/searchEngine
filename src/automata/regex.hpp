@@ -114,7 +114,6 @@ class Regex {
         std::array<int, 256> transitions{};
     };
 
-    mutable std::mutex dfa_mutex_{};
     std::vector<DFAState> dfa_states_{};
     std::unordered_map<std::string, int> nfa_set_to_dfa_{};
 };

@@ -333,6 +333,26 @@ RadixTrie RadixTrie::deserialize(std::istream& is) {
         throw std::runtime_error("Corrupted RadixTrie: trie contains 0 nodes (rootless)");
     }
 
+    constexpr uint64_t MAX_RADIX_NODES = 50'000'000ULL;
+    constexpr uint64_t MAX_RADIX_POOL = 1024ULL * 1024ULL * 1024ULL; // 1 GB
+    if (num_n > MAX_RADIX_NODES || pool_sz > MAX_RADIX_POOL) {
+        throw std::runtime_error("Corrupted RadixTrie: node count or pool size exceeds maximum limits");
+    }
+
+    // Validate available stream bytes before allocation
+    auto cur_pos = is.tellg();
+    if (cur_pos != std::streampos(-1)) {
+        is.seekg(0, std::ios::end);
+        auto end_pos = is.tellg();
+        is.seekg(cur_pos);
+        if (end_pos >= cur_pos) {
+            uint64_t rem_bytes = static_cast<uint64_t>(end_pos - cur_pos);
+            if (num_n * sizeof(RadixNode) + pool_sz > rem_bytes) {
+                throw std::runtime_error("Corrupted RadixTrie: required bytes exceed stream size");
+            }
+        }
+    }
+
     trie.num_terms_ = static_cast<size_t>(num_t);
     trie.nodes_.resize(static_cast<size_t>(num_n));
     if (!is.read(reinterpret_cast<char*>(trie.nodes_.data()),
@@ -371,25 +391,50 @@ RadixTrie RadixTrie::deserialize(std::istream& is) {
         }
     }
 
-    // Enforce tree acyclicity via 3-color DFS traversal
+    // Iterative cycle detection with bounded steps across both child and sibling chains
     std::vector<uint8_t> color(trie.nodes_.size(), 0);  // 0 = white, 1 = gray, 2 = black
-    auto dfs_check = [&](auto& self, uint32_t u) -> void {
-        color[u] = 1;
-        uint32_t child = trie.nodes_[u].first_child;
-        while (child != 0) {
-            if (color[child] == 1) {
-                throw std::runtime_error("Corrupted RadixTrie: cycle detected involving node " +
-                                         std::to_string(child));
-            }
-            if (color[child] == 0) {
-                self(self, child);
-            }
-            child = trie.nodes_[child].next_sibling;
-        }
-        color[u] = 2;
-    };
+    std::vector<uint32_t> stack;
+    stack.reserve(64);
+    stack.push_back(0);
+    color[0] = 1;
 
-    dfs_check(dfs_check, 0);
+    size_t total_steps = 0;
+    const size_t max_total_steps = trie.nodes_.size() * 3 + 100;
+
+    while (!stack.empty()) {
+        if (++total_steps > max_total_steps) {
+            throw std::runtime_error("Corrupted RadixTrie: cycle detected (step limit exceeded)");
+        }
+
+        uint32_t u = stack.back();
+        uint32_t child = trie.nodes_[u].first_child;
+        bool pushed = false;
+
+        uint32_t sib = child;
+        size_t sib_steps = 0;
+        while (sib != 0) {
+            if (++sib_steps > trie.nodes_.size()) {
+                throw std::runtime_error("Corrupted RadixTrie: sibling cycle detected in node " +
+                                         std::to_string(sib));
+            }
+            if (color[sib] == 1) {
+                throw std::runtime_error("Corrupted RadixTrie: cycle detected involving node " +
+                                         std::to_string(sib));
+            }
+            if (color[sib] == 0) {
+                color[sib] = 1;
+                stack.push_back(sib);
+                pushed = true;
+                break;
+            }
+            sib = trie.nodes_[sib].next_sibling;
+        }
+
+        if (!pushed) {
+            color[u] = 2;
+            stack.pop_back();
+        }
+    }
 
     return trie;
 }

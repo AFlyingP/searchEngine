@@ -74,7 +74,7 @@ class SuffixArray {
  *
  * Automatically chooses 32-bit SA if n < 2^31, otherwise 64-bit SA.
  *
- * Complexity: O(n) time, <= 6n bytes space in 32-bit mode.
+ * Complexity: O(n) time, ~8n-9n bytes working space in 32-bit mode.
  */
 SuffixArray build_suffix_array(std::span<const uint8_t> text, SaisStats* stats = nullptr);
 SuffixArray build_suffix_array(std::string_view text, SaisStats* stats = nullptr);

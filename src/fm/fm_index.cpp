@@ -301,6 +301,14 @@ FMIndex FMIndex::deserialize(std::istream& is) {
     if (bs > 0 && pi >= bs) {
         throw std::runtime_error("Corrupted FMIndex: invalid primary_index");
     }
+    if (bs != ts + 1 && bs != ts) {
+        throw std::runtime_error("Corrupted FMIndex: inconsistent bwt_size and text_size");
+    }
+
+    constexpr uint64_t MAX_FM_TEXT = 4ULL * 1024ULL * 1024ULL * 1024ULL; // 4 GB
+    if (ts > MAX_FM_TEXT || bs > MAX_FM_TEXT) {
+        throw std::runtime_error("Corrupted FMIndex: text or BWT size exceeds limit");
+    }
 
     fmi.text_size_ = static_cast<size_t>(ts);
     fmi.bwt_size_ = static_cast<size_t>(bs);
@@ -324,6 +332,9 @@ FMIndex FMIndex::deserialize(std::istream& is) {
         if (!is.read(reinterpret_cast<char*>(&s32_sz), sizeof(s32_sz))) {
             throw std::runtime_error("Failed to read FMIndex sampled SA 32 size");
         }
+        if (s32_sz > bs) {
+            throw std::runtime_error("Corrupted FMIndex: sampled_sa_32 size exceeds BWT size");
+        }
         fmi.sampled_sa_32_.resize(static_cast<size_t>(s32_sz));
         if (s32_sz > 0) {
             if (!is.read(reinterpret_cast<char*>(fmi.sampled_sa_32_.data()),
@@ -335,6 +346,9 @@ FMIndex FMIndex::deserialize(std::istream& is) {
         uint64_t s64_sz = 0;
         if (!is.read(reinterpret_cast<char*>(&s64_sz), sizeof(s64_sz))) {
             throw std::runtime_error("Failed to read FMIndex sampled SA 64 size");
+        }
+        if (s64_sz > bs) {
+            throw std::runtime_error("Corrupted FMIndex: sampled_sa_64 size exceeds BWT size");
         }
         fmi.sampled_sa_64_.resize(static_cast<size_t>(s64_sz));
         if (s64_sz > 0) {
@@ -348,6 +362,9 @@ FMIndex FMIndex::deserialize(std::istream& is) {
     uint64_t inv_sz = 0;
     if (!is.read(reinterpret_cast<char*>(&inv_sz), sizeof(inv_sz))) {
         throw std::runtime_error("Failed to read FMIndex inv_samples size");
+    }
+    if (inv_sz > bs) {
+        throw std::runtime_error("Corrupted FMIndex: inv_sampled_rows size exceeds BWT size");
     }
     fmi.inv_sampled_rows_.resize(static_cast<size_t>(inv_sz));
     if (inv_sz > 0) {

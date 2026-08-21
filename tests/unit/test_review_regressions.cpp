@@ -345,3 +345,138 @@ TEST(RegressionTest, SurrogatePairsAndLoneSurrogatesInJsonl) {
     std::filesystem::remove(tmp_jsonl);
     std::filesystem::remove(tmp_idx);
 }
+
+TEST(RegressionTest, SiblingCycleDetectionHangProbe) {
+    // Crafted 3-node trie stream where next_sibling forms a cycle: node 1 -> node 2 -> node 1
+    std::stringstream ss;
+    uint64_t num_n = 3;
+    uint64_t pool_sz = 16;
+    uint64_t num_t = 0;
+    ss.write(reinterpret_cast<const char*>(&num_n), sizeof(num_n));
+    ss.write(reinterpret_cast<const char*>(&pool_sz), sizeof(pool_sz));
+    ss.write(reinterpret_cast<const char*>(&num_t), sizeof(num_t));
+
+    RadixNode nodes[3]{};
+    // Node 0: root, first_child = 1
+    nodes[0].first_child = 1;
+    nodes[0].next_sibling = 0;
+    // Node 1: sibling points to 2
+    nodes[1].first_child = 0;
+    nodes[1].next_sibling = 2;
+    // Node 2: sibling points to 1 (sibling cycle!)
+    nodes[2].first_child = 0;
+    nodes[2].next_sibling = 1;
+
+    ss.write(reinterpret_cast<const char*>(nodes), sizeof(nodes));
+    std::string pool(16, 'a');
+    ss.write(pool.data(), static_cast<std::streamsize>(pool.size()));
+
+    EXPECT_THROW(RadixTrie::deserialize(ss), std::runtime_error);
+}
+
+TEST(RegressionTest, DeserializerOversizedAllocationGuards) {
+    // Huge node count
+    {
+        std::stringstream ss;
+        uint64_t num_n = 999'999'999ULL;
+        uint64_t pool_sz = 0;
+        uint64_t num_t = 0;
+        ss.write(reinterpret_cast<const char*>(&num_n), sizeof(num_n));
+        ss.write(reinterpret_cast<const char*>(&pool_sz), sizeof(pool_sz));
+        ss.write(reinterpret_cast<const char*>(&num_t), sizeof(num_t));
+
+        EXPECT_THROW(RadixTrie::deserialize(ss), std::runtime_error);
+    }
+
+    // FMIndex oversized sampled SA
+    {
+        std::stringstream ss;
+        uint64_t ts = 10, bs = 11, sr = 4, pi = 0;
+        uint8_t is64 = 0;
+        ss.write(reinterpret_cast<const char*>(&ts), sizeof(ts));
+        ss.write(reinterpret_cast<const char*>(&bs), sizeof(bs));
+        ss.write(reinterpret_cast<const char*>(&sr), sizeof(sr));
+        ss.write(reinterpret_cast<const char*>(&pi), sizeof(pi));
+        ss.write(reinterpret_cast<const char*>(&is64), sizeof(is64));
+
+        uint64_t c_table[256]{};
+        ss.write(reinterpret_cast<const char*>(c_table), sizeof(c_table));
+
+        WaveletTree wt;
+        wt.serialize(ss);
+        RankSelectBitVector bv;
+        bv.serialize(ss);
+
+        // Claim 999999 sampled elements for an 11-byte BWT
+        uint64_t s32_sz = 999'999ULL;
+        ss.write(reinterpret_cast<const char*>(&s32_sz), sizeof(s32_sz));
+
+        EXPECT_THROW(FMIndex::deserialize(ss), std::runtime_error);
+    }
+}
+
+TEST(RegressionTest, BM25K1BMismatchThrowOnConstruction) {
+    auto tmp_idx = std::filesystem::temp_directory_path() / "test_k1b_throw.idx";
+    {
+        IndexBuilder builder;
+        builder.add_document(1, "Title", "bm25 test document");
+        builder.write_index(tmp_idx);
+    }
+
+    {
+        IndexView view(tmp_idx);
+        // Default index stats has k1=0.9, b=0.4
+        // Passing mismatched BM25 parameters must throw invalid_argument
+        Bm25Scorer mismatched_scorer(1.5f, 0.75f, view.avg_doc_len());
+        EXPECT_THROW(QueryEvaluator eval(view, mismatched_scorer), std::invalid_argument);
+    }
+
+    std::filesystem::remove(tmp_idx);
+}
+
+TEST(RegressionTest, TieBreakHeapEvictionPicksLowestDocIds) {
+    auto tmp_idx = std::filesystem::temp_directory_path() / "test_tiebreak_evict.idx";
+    {
+        IndexBuilder builder;
+        // Same length and same term counts -> exactly identical BM25 scores
+        builder.add_document(40, "Title 40", "identical term counts");
+        builder.add_document(10, "Title 10", "identical term counts");
+        builder.add_document(30, "Title 30", "identical term counts");
+        builder.add_document(20, "Title 20", "identical term counts");
+        builder.write_index(tmp_idx);
+    }
+
+    {
+        IndexView view(tmp_idx);
+        QueryEvaluator evaluator(view);
+
+        // Request top k=2 out of 4 documents -> must keep lowest doc IDs 10 and 20!
+        auto res = evaluator.search("identical", 2);
+        ASSERT_EQ(res.hits.size(), 2u);
+        EXPECT_EQ(res.hits[0].doc_id, 10u);
+        EXPECT_EQ(res.hits[1].doc_id, 20u);
+    }
+
+    std::filesystem::remove(tmp_idx);
+}
+
+TEST(RegressionTest, PhraseWithNegationFilter) {
+    auto tmp_idx = std::filesystem::temp_directory_path() / "test_phrase_neg.idx";
+    {
+        IndexBuilder builder;
+        builder.add_document(1, "Doc 1", "database search engine architecture");
+        builder.add_document(2, "Doc 2", "database search engine lucene index");
+        builder.write_index(tmp_idx);
+    }
+
+    {
+        IndexView view(tmp_idx);
+        QueryEvaluator evaluator(view);
+
+        auto res = evaluator.search("\"database search\" -lucene", 5);
+        ASSERT_EQ(res.hits.size(), 1u);
+        EXPECT_EQ(res.hits[0].doc_id, 1u);
+    }
+
+    std::filesystem::remove(tmp_idx);
+}

@@ -313,15 +313,70 @@ QueryResult QueryEvaluator::search(std::string_view query_str, size_t k, bool us
         return QueryResult{};
     }
 
-    // Check if phrase query: starts and ends with '"'
-    if (query_str.size() >= 2 && query_str.front() == '"' && query_str.back() == '"') {
-        std::string_view inner = query_str.substr(1, query_str.size() - 2);
-        auto tokens = analyzer_.analyze(inner);
-        std::vector<std::string> terms;
-        for (const auto& tok : tokens) {
-            terms.push_back(tok.term);
+    // Check for quoted phrase queries (including phrase queries with negated terms like '"a b" -c')
+    std::string q_str(query_str);
+    size_t q_start = q_str.find('"');
+    size_t q_end = (q_start != std::string::npos) ? q_str.find('"', q_start + 1) : std::string::npos;
+    if (q_start != std::string::npos && q_end != std::string::npos) {
+        std::string phrase_inner = q_str.substr(q_start + 1, q_end - q_start - 1);
+        auto p_toks = analyzer_.analyze(phrase_inner);
+        std::vector<std::string> phrase_terms;
+        for (const auto& tok : p_toks) {
+            phrase_terms.push_back(tok.term);
         }
-        return search_phrase(terms, k);
+
+        std::string remaining = q_str.substr(0, q_start) + " " + q_str.substr(q_end + 1);
+        std::istringstream iss(remaining);
+        std::string token;
+        std::vector<std::string> negated_terms;
+        while (iss >> token) {
+            if (token.size() > 1 && token.front() == '-') {
+                auto neg_toks = analyzer_.analyze(token.substr(1));
+                for (const auto& t : neg_toks) {
+                    negated_terms.push_back(t.term);
+                }
+            }
+        }
+
+        if (!phrase_terms.empty()) {
+            if (negated_terms.empty()) {
+                return search_phrase(phrase_terms, k);
+            }
+            auto res = search_phrase(phrase_terms, k + negated_terms.size() * 5);
+            QueryResult filtered;
+            filtered.total_estimate = res.total_estimate;
+
+            std::vector<std::vector<uint32_t>> neg_doc_lists;
+            for (const auto& neg : negated_terms) {
+                auto neg_payload = index_.term_payload(neg);
+                if (neg_payload.valid() && neg_payload.doc_freq > 0) {
+                    PostingListReader r(index_.postings_section_data() + neg_payload.postings_offset,
+                                        neg_payload.postings_len);
+                    std::vector<uint32_t> neg_docs;
+                    neg_docs.reserve(neg_payload.doc_freq);
+                    while (r.has_next()) {
+                        neg_docs.push_back(r.doc_id());
+                        r.next();
+                    }
+                    neg_doc_lists.push_back(std::move(neg_docs));
+                }
+            }
+
+            for (const auto& hit : res.hits) {
+                bool excluded = false;
+                for (const auto& ndocs : neg_doc_lists) {
+                    if (std::binary_search(ndocs.begin(), ndocs.end(), hit.doc_id)) {
+                        excluded = true;
+                        break;
+                    }
+                }
+                if (!excluded) {
+                    filtered.hits.push_back(hit);
+                    if (filtered.hits.size() >= k) break;
+                }
+            }
+            return filtered;
+        }
     }
 
     // Split words to detect negated terms ("-term") and "OR" operator

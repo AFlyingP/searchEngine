@@ -108,15 +108,16 @@ jobs:
             -DENABLE_COVERAGE=ON
           cmake --build build/coverage
       - name: Run Test Suite
-        run: ctest --test-dir build/coverage --output-on-failure
+        run: |
+          LLVM_PROFILE_FILE="build/coverage/%p.profraw" ctest --test-dir build/coverage --output-on-failure
       - name: Generate and Validate Coverage Report
         run: |
-          llvm-profdata merge -sparse default.profraw -o coverage.profdata
+          llvm-profdata merge -sparse build/coverage/*.profraw -o build/coverage/coverage.profdata
           llvm-cov show ./build/coverage/bin/test_needlefish_unit \
-            -instr-profile=coverage.profdata \
+            -instr-profile=build/coverage/coverage.profdata \
             -ignore-filename-regex='(tests/|_deps/)' \
             -format=text > coverage.txt
           cat coverage.txt
           llvm-cov report ./build/coverage/bin/test_needlefish_unit \
-            -instr-profile=coverage.profdata \
+            -instr-profile=build/coverage/coverage.profdata \
             -ignore-filename-regex='(tests/|_deps/)'
