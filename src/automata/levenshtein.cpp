@@ -1,11 +1,12 @@
 #include "automata/levenshtein.hpp"
 
 #include <algorithm>
+#include <queue>
 
 namespace needlefish {
 
 LevenshteinAutomaton::LevenshteinAutomaton(std::string_view target, size_t max_distance)
-    : target_(target.substr(0, std::min<size_t>(target.size(), 128))), max_distance_(max_distance) {}
+    : target_(target), max_distance_(max_distance) {}
 
 LevenshteinAutomaton::State LevenshteinAutomaton::initial_state() const {
     State state(target_.size() + 1);
@@ -56,10 +57,25 @@ size_t LevenshteinAutomaton::distance(const State& state) const noexcept {
     return state.back();
 }
 
+namespace {
+struct FuzzyMatchHeapComparator {
+    bool operator()(const FuzzyMatch& a, const FuzzyMatch& b) const noexcept {
+        // Max-heap: worst match is at the top to be popped
+        if (a.distance != b.distance) {
+            return a.distance < b.distance;
+        }
+        if (a.payload.doc_freq != b.payload.doc_freq) {
+            return a.payload.doc_freq > b.payload.doc_freq;
+        }
+        return a.term < b.term;
+    }
+};
+}  // namespace
+
 void LevenshteinAutomaton::dfs_trie(uint32_t node_idx, const State& state,
                                     std::string& current_prefix, const RadixTrie& trie,
                                     std::vector<FuzzyMatch>& matches, size_t max_results) const {
-    if (matches.size() >= max_results || node_idx >= trie.nodes().size() || !can_match(state)) {
+    if (node_idx >= trie.nodes().size() || !can_match(state)) {
         return;
     }
 
@@ -71,7 +87,7 @@ void LevenshteinAutomaton::dfs_trie(uint32_t node_idx, const State& state,
     }
 
     uint32_t child_idx = node.first_child;
-    while (child_idx != 0 && matches.size() < max_results) {
+    while (child_idx != 0) {
         const auto& child = trie.nodes()[child_idx];
         std::string_view edge(trie.string_pool().data() + child.edge_offset, child.edge_len);
 
@@ -112,7 +128,9 @@ std::vector<FuzzyMatch> LevenshteinAutomaton::match_trie(const RadixTrie& trie,
     std::sort(matches.begin(), matches.end(), [](const FuzzyMatch& a, const FuzzyMatch& b) {
         if (a.distance != b.distance)
             return a.distance < b.distance;
-        return a.payload.doc_freq > b.payload.doc_freq;
+        if (a.payload.doc_freq != b.payload.doc_freq)
+            return a.payload.doc_freq > b.payload.doc_freq;
+        return a.term < b.term;
     });
 
     if (matches.size() > max_results) {

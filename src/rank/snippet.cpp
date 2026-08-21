@@ -6,6 +6,50 @@
 
 namespace needlefish {
 
+namespace {
+
+std::string html_escape(std::string_view str) {
+    std::string out;
+    out.reserve(str.size() + 16);
+    for (char c : str) {
+        switch (c) {
+            case '&':
+                out += "&amp;";
+                break;
+            case '<':
+                out += "&lt;";
+                break;
+            case '>':
+                out += "&gt;";
+                break;
+            case '"':
+                out += "&quot;";
+                break;
+            case '\'':
+                out += "&#39;";
+                break;
+            default:
+                out.push_back(c);
+                break;
+        }
+    }
+    return out;
+}
+
+// Adjust byte offset so we don't slice in the middle of a multi-byte UTF-8 sequence
+size_t adjust_utf8_boundary(std::string_view text, size_t pos) {
+    if (pos >= text.size()) {
+        return text.size();
+    }
+    // If text[pos] is a UTF-8 continuation byte (10xxxxxx), move backwards to the start of the sequence
+    while (pos > 0 && (static_cast<uint8_t>(text[pos]) & 0xC0) == 0x80) {
+        --pos;
+    }
+    return pos;
+}
+
+}  // namespace
+
 SnippetGenerator::SnippetGenerator(size_t max_snippet_len, std::string_view pre_tag,
                                    std::string_view post_tag)
     : max_snippet_len_(max_snippet_len), pre_tag_(pre_tag), post_tag_(post_tag) {}
@@ -17,8 +61,8 @@ std::string SnippetGenerator::highlight(std::string_view doc_text,
     }
 
     if (query_terms.empty()) {
-        const size_t len = std::min(doc_text.size(), max_snippet_len_);
-        std::string snippet(doc_text.substr(0, len));
+        const size_t len = adjust_utf8_boundary(doc_text, std::min(doc_text.size(), max_snippet_len_));
+        std::string snippet = html_escape(doc_text.substr(0, len));
         if (doc_text.size() > max_snippet_len_) {
             snippet += "...";
         }
@@ -27,14 +71,15 @@ std::string SnippetGenerator::highlight(std::string_view doc_text,
 
     std::unordered_set<std::string> target_terms;
     for (const auto& qt : query_terms) {
+        target_terms.insert(qt);
         target_terms.insert(analyzer_.normalize_term(qt));
     }
 
     // Tokenize full text
     auto tokens = analyzer_.analyze(doc_text);
     if (tokens.empty()) {
-        const size_t len = std::min(doc_text.size(), max_snippet_len_);
-        return std::string(doc_text.substr(0, len));
+        const size_t len = adjust_utf8_boundary(doc_text, std::min(doc_text.size(), max_snippet_len_));
+        return html_escape(doc_text.substr(0, len));
     }
 
     // Find token with highest local density of matching query terms
@@ -69,6 +114,7 @@ std::string SnippetGenerator::highlight(std::string_view doc_text,
             window_end = next_space;
         }
     }
+    window_end = adjust_utf8_boundary(doc_text, window_end);
 
     // Build highlighted string inside window
     std::string result;
@@ -86,22 +132,23 @@ std::string SnippetGenerator::highlight(std::string_view doc_text,
         }
 
         if (tok.start_offset > curr_pos) {
-            result.append(doc_text.substr(curr_pos, tok.start_offset - curr_pos));
+            result += html_escape(doc_text.substr(curr_pos, tok.start_offset - curr_pos));
         }
 
+        std::string term_slice = html_escape(doc_text.substr(tok.start_offset, tok.end_offset - tok.start_offset));
         if (target_terms.find(tok.term) != target_terms.end()) {
             result += pre_tag_;
-            result.append(doc_text.substr(tok.start_offset, tok.end_offset - tok.start_offset));
+            result += term_slice;
             result += post_tag_;
         } else {
-            result.append(doc_text.substr(tok.start_offset, tok.end_offset - tok.start_offset));
+            result += term_slice;
         }
 
         curr_pos = tok.end_offset;
     }
 
     if (curr_pos < window_end) {
-        result.append(doc_text.substr(curr_pos, window_end - curr_pos));
+        result += html_escape(doc_text.substr(curr_pos, window_end - curr_pos));
     }
 
     if (window_end < doc_text.size()) {

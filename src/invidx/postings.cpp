@@ -7,6 +7,9 @@ namespace needlefish {
 
 void PostingListWriter::add_posting(uint32_t doc_id, uint32_t term_freq,
                                     std::span<const uint32_t> positions) {
+    if (!block_doc_ids_.empty() && doc_id <= block_doc_ids_.back()) {
+        throw std::invalid_argument("PostingListWriter: doc_ids must be strictly monotonically increasing");
+    }
     block_doc_ids_.push_back(doc_id);
     block_freqs_.push_back(term_freq);
     block_positions_.emplace_back(positions.begin(), positions.end());
@@ -16,7 +19,7 @@ void PostingListWriter::add_posting(uint32_t doc_id, uint32_t term_freq,
 
 void PostingListWriter::flush_batch(size_t start_idx, size_t count,
                                     std::vector<uint8_t>& postings_out,
-                                    std::vector<uint8_t>& positions_out, float max_term_score) {
+                                    std::vector<uint8_t>& positions_out, float block_max_score) {
     if (count == 0) {
         return;
     }
@@ -63,7 +66,7 @@ void PostingListWriter::flush_batch(size_t start_idx, size_t count,
 
     // 3. Write block header
     PostingBlockHeader header{.max_doc_id = block_doc_ids_[start_idx + num_docs - 1],
-                              .block_max_score = max_term_score,
+                              .block_max_score = block_max_score,
                               .num_docs = num_docs,
                               .bit_width = bit_width,
                               .positions_offset = pos_start_offset,
@@ -95,12 +98,16 @@ void PostingListWriter::flush_batch(size_t start_idx, size_t count,
 }
 
 void PostingListWriter::finish(std::vector<uint8_t>& postings_out,
-                               std::vector<uint8_t>& positions_out, float max_term_score) {
+                               std::vector<uint8_t>& positions_out,
+                               std::span<const float> block_max_scores) {
     size_t processed = 0;
+    size_t block_idx = 0;
     while (processed < block_doc_ids_.size()) {
         const size_t batch_size = std::min<size_t>(128, block_doc_ids_.size() - processed);
-        flush_batch(processed, batch_size, postings_out, positions_out, max_term_score);
+        float b_max = (block_idx < block_max_scores.size()) ? block_max_scores[block_idx] : 0.0f;
+        flush_batch(processed, batch_size, postings_out, positions_out, b_max);
         processed += batch_size;
+        block_idx++;
     }
     block_doc_ids_.clear();
     block_freqs_.clear();
@@ -164,7 +171,12 @@ void PostingListReader::load_next_block() {
             decoded_freqs_[i] = 1;
             continue;
         }
-        ptr += Varint::decode_uint32(ptr, &decoded_freqs_[i]);
+        size_t b = Varint::decode_uint32(ptr, end, &decoded_freqs_[i]);
+        if (b == 0) {
+            decoded_freqs_[i] = 1;
+            break;
+        }
+        ptr += b;
     }
 
     // Decode Varint position counts and record byte offsets
@@ -174,7 +186,8 @@ void PostingListReader::load_next_block() {
     for (size_t i = 0; i < curr_block_header_.num_docs; ++i) {
         uint32_t pos_count = 0;
         if (ptr < end) {
-            ptr += Varint::decode_uint32(ptr, &pos_count);
+            size_t b = Varint::decode_uint32(ptr, end, &pos_count);
+            ptr += b;
         }
         decoded_pos_lens_[i] = pos_count;
         decoded_pos_offsets_[i] = curr_pos_stream_offset;
@@ -184,7 +197,9 @@ void PostingListReader::load_next_block() {
             for (uint32_t p = 0; p < pos_count; ++p) {
                 if (pos_ptr >= pos_end) break;
                 uint32_t dummy = 0;
-                pos_ptr += Varint::decode_uint32(pos_ptr, &dummy);
+                size_t b = Varint::decode_uint32(pos_ptr, pos_end, &dummy);
+                if (b == 0) break;
+                pos_ptr += b;
             }
             curr_pos_stream_offset = static_cast<uint32_t>(pos_ptr - positions_data_.data());
         }
@@ -246,18 +261,26 @@ void PostingListReader::advance(uint32_t target_doc_id) {
 
 void PostingListReader::read_positions(std::vector<uint32_t>& out) const {
     out.clear();
-    if (at_end_ || block_idx_ >= curr_block_header_.num_docs) {
+    if (at_end_ || block_idx_ >= curr_block_header_.num_docs || positions_data_.empty()) {
         return;
     }
 
     const uint32_t count = decoded_pos_lens_[block_idx_];
-    out.reserve(count);
+    const uint32_t offset = decoded_pos_offsets_[block_idx_];
+    if (offset >= positions_data_.size()) {
+        return;
+    }
 
-    const uint8_t* ptr = positions_data_.data() + decoded_pos_offsets_[block_idx_];
+    out.reserve(count);
+    const uint8_t* ptr = positions_data_.data() + offset;
+    const uint8_t* end = positions_data_.data() + positions_data_.size();
     uint32_t running_pos = 0;
     for (uint32_t i = 0; i < count; ++i) {
+        if (ptr >= end) break;
         uint32_t delta = 0;
-        ptr += Varint::decode_uint32(ptr, &delta);
+        size_t b = Varint::decode_uint32(ptr, end, &delta);
+        if (b == 0) break;
+        ptr += b;
         running_pos += delta;
         out.push_back(running_pos);
     }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -70,7 +72,7 @@ class HttpServer {
      */
     void stop();
 
-    [[nodiscard]] bool is_running() const noexcept { return is_running_; }
+    [[nodiscard]] bool is_running() const noexcept { return is_running_.load(); }
     [[nodiscard]] uint16_t port() const noexcept { return port_; }
     [[nodiscard]] std::string_view host() const noexcept { return host_; }
 
@@ -78,6 +80,7 @@ class HttpServer {
     [[nodiscard]] HttpResponse handle_api_search(const HttpRequest& req) const;
     [[nodiscard]] HttpResponse handle_api_suggest(const HttpRequest& req) const;
     [[nodiscard]] HttpResponse handle_api_stats(const HttpRequest& req) const;
+    [[nodiscard]] HttpResponse handle_api_health(const HttpRequest& req) const;
     [[nodiscard]] HttpResponse handle_static_file(std::string_view path) const;
 
     IndexView& index_;
@@ -85,8 +88,9 @@ class HttpServer {
     std::string host_;
     uint16_t port_;
     std::string static_dir_{"web"};
-    bool is_running_{false};
+    std::atomic<bool> is_running_{false};
     uintptr_t server_socket_{static_cast<uintptr_t>(~0ULL)};
+    std::chrono::steady_clock::time_point start_time_{std::chrono::steady_clock::now()};
 };
 
 }  // namespace needlefish

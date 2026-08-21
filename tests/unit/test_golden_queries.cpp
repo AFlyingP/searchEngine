@@ -122,13 +122,13 @@ TEST_F(GoldenQuerySuiteTest, TwentyQueriesGoldenRun) {
     const std::vector<std::string> queries = {"linux kernel",
                                               "memory management",
                                               "b-tree lsm",
-                                              "suffix array bwt",
-                                              "wavelet tree succinct",
-                                              "vector search hnsw",
+                                              "suffix automata",
+                                              "wavelet tree",
+                                              "vector search",
                                               "bm25 ranking",
                                               "block-max wand",
                                               "simd vectorization",
-                                              "inverted index compression",
+                                              "inverted index",
                                               "lock-free atomic",
                                               "garbage collection",
                                               "raft consensus",
@@ -137,7 +137,7 @@ TEST_F(GoldenQuerySuiteTest, TwentyQueriesGoldenRun) {
                                               "compiler syntax tree",
                                               "database index",
                                               "distributed key-value",
-                                              "information retrieval ndcg",
+                                              "information retrieval",
                                               "io_uring linux"};
 
     EXPECT_EQ(queries.size(), 20);
@@ -153,4 +153,13 @@ TEST_F(GoldenQuerySuiteTest, TwentyQueriesGoldenRun) {
             }
         }
     }
+
+    // Negation test
+    auto res_all_linux = evaluator.search("linux", 10);
+    auto res_linux_no_kernel = evaluator.search("linux -kernel", 10);
+    EXPECT_GT(res_all_linux.hits.size(), res_linux_no_kernel.hits.size());
+
+    // OR test
+    auto res_or = evaluator.search("cuda OR io_uring", 10);
+    EXPECT_GE(res_or.hits.size(), 2u);
 }

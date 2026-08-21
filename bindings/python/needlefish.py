@@ -6,6 +6,7 @@ Zero-copy ctypes binding to the compiled Needlefish C search engine library.
 import ctypes
 import os
 import sys
+import threading
 from typing import List, Dict, Any, Optional
 
 class _NeedlefishHit(ctypes.Structure):
@@ -31,9 +32,16 @@ class _NeedlefishSuggestResult(ctypes.Structure):
 
 class NeedlefishIndex:
     def __init__(self, index_path: str, lib_path: Optional[str] = None):
+        self._lock = threading.RLock()
+        self._handle = None
+        self._lib = None
+
         if lib_path is None:
             # Auto-detect library in build directory
             candidates = [
+                os.path.join(os.path.dirname(__file__), "..", "..", "build", "libneedlefish_c.dll"),
+                os.path.join(os.path.dirname(__file__), "..", "..", "build", "libneedlefish_c.so"),
+                os.path.join(os.path.dirname(__file__), "..", "..", "build", "libneedlefish_c.dylib"),
                 os.path.join(os.path.dirname(__file__), "..", "..", "build", "debug", "libneedlefish_c.dll"),
                 os.path.join(os.path.dirname(__file__), "..", "..", "build", "debug", "libneedlefish_c.so"),
                 os.path.join(os.path.dirname(__file__), "..", "..", "build", "debug", "libneedlefish_c.dylib"),
@@ -86,39 +94,61 @@ class NeedlefishIndex:
         self._lib.needlefish_free_suggest_result.restype = None
 
     def search(self, query: str, top_k: int = 10) -> Dict[str, Any]:
-        res_ptr = self._lib.needlefish_search(self._handle, query.encode("utf-8"), top_k)
-        if not res_ptr:
-            return {"hits": [], "total_estimate": 0, "took_us": 0}
-        
-        try:
-            res = res_ptr.contents
-            hits = []
-            for i in range(res.num_hits):
-                hit = res.hits[i]
-                hits.append({
-                    "doc_id": hit.doc_id,
-                    "score": hit.score,
-                    "title": hit.title.decode("utf-8", errors="replace") if hit.title else "",
-                    "snippet": hit.snippet.decode("utf-8", errors="replace") if hit.snippet else ""
-                })
-            return {"hits": hits, "total_estimate": res.num_hits, "took_us": res.took_us}
-        finally:
-            self._lib.needlefish_free_search_result(res_ptr)
+        with self._lock:
+            if not self._handle or not self._lib:
+                raise RuntimeError("NeedlefishIndex is closed")
+            res_ptr = self._lib.needlefish_search(self._handle, query.encode("utf-8"), top_k)
+            if not res_ptr:
+                return {"hits": [], "total_estimate": 0, "took_us": 0}
+            
+            try:
+                res = res_ptr.contents
+                hits = []
+                for i in range(res.num_hits):
+                    hit = res.hits[i]
+                    hits.append({
+                        "doc_id": hit.doc_id,
+                        "score": hit.score,
+                        "title": hit.title.decode("utf-8", errors="replace") if hit.title else "",
+                        "snippet": hit.snippet.decode("utf-8", errors="replace") if hit.snippet else ""
+                    })
+                return {"hits": hits, "total_estimate": res.num_hits, "took_us": res.took_us}
+            finally:
+                self._lib.needlefish_free_search_result(res_ptr)
 
     def suggest(self, prefix: str, max_results: int = 10) -> List[str]:
-        res_ptr = self._lib.needlefish_suggest(self._handle, prefix.encode("utf-8"), max_results)
-        if not res_ptr:
-            return []
-        try:
-            res = res_ptr.contents
-            return [res.suggestions[i].decode("utf-8", errors="replace") for i in range(res.num_suggestions)]
-        finally:
-            self._lib.needlefish_free_suggest_result(res_ptr)
+        with self._lock:
+            if not self._handle or not self._lib:
+                raise RuntimeError("NeedlefishIndex is closed")
+            res_ptr = self._lib.needlefish_suggest(self._handle, prefix.encode("utf-8"), max_results)
+            if not res_ptr:
+                return []
+            try:
+                res = res_ptr.contents
+                return [res.suggestions[i].decode("utf-8", errors="replace") for i in range(res.num_suggestions)]
+            finally:
+                self._lib.needlefish_free_suggest_result(res_ptr)
+
+    def total_docs(self) -> int:
+        with self._lock:
+            if not self._handle or not self._lib:
+                return 0
+            return self._lib.needlefish_total_docs(self._handle)
+
+    def close(self):
+        with self._lock:
+            if getattr(self, "_handle", None) and self._lib:
+                self._lib.needlefish_close(self._handle)
+                self._handle = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
     def __del__(self):
-        if hasattr(self, "_handle") and self._handle:
-            self._lib.needlefish_close(self._handle)
-            self._handle = None
+        self.close()
 
 
 if __name__ == "__main__":

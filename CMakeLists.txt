@@ -8,9 +8,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Export compile commands for clangd/clang-tidy
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
 # Options
 option(ENABLE_SANITIZERS "Enable ASan and UBSan" OFF)
 option(ENABLE_TSAN "Enable ThreadSanitizer" OFF)
+option(ENABLE_LIBFUZZER "Enable libFuzzer instrumentation" OFF)
 option(ENABLE_LTO "Enable Link-Time Optimization" OFF)
 option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
 option(ENABLE_NATIVE_ARCH "Enable native architecture instructions" OFF)

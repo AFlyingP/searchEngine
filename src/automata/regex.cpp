@@ -35,6 +35,9 @@ bool RegexParser::at_end() const noexcept {
 }
 
 std::shared_ptr<RegexASTNode> RegexParser::parse(std::string_view pattern) {
+    if (pattern.size() > 512) {
+        throw std::invalid_argument("Regex pattern exceeds maximum length limit of 512 characters");
+    }
     RegexParser parser(pattern);
     auto ast = parser.parse_expression();
     if (!parser.at_end()) {
@@ -110,6 +113,9 @@ std::shared_ptr<RegexASTNode> RegexParser::parse_repeat() {
         uint32_t min_c = 0;
         while (peek() >= '0' && peek() <= '9') {
             min_c = min_c * 10 + static_cast<uint32_t>(advance() - '0');
+            if (min_c > 100) {
+                throw std::runtime_error("Regex repetition limit exceeded (max 100)");
+            }
         }
         uint32_t max_c = min_c;
         if (match(',')) {
@@ -117,13 +123,19 @@ std::shared_ptr<RegexASTNode> RegexParser::parse_repeat() {
                 max_c = 0;
                 while (peek() >= '0' && peek() <= '9') {
                     max_c = max_c * 10 + static_cast<uint32_t>(advance() - '0');
+                    if (max_c > 100) {
+                        throw std::runtime_error("Regex repetition limit exceeded (max 100)");
+                    }
                 }
             } else {
-                max_c = 1000;  // unbounded upper limit
+                max_c = 100;  // bounded upper limit
             }
         }
         if (!match('}')) {
             throw std::runtime_error("Expected '}' in regex quantifier");
+        }
+        if (min_c > max_c) {
+            throw std::runtime_error("Regex quantifier min exceeds max: {" + std::to_string(min_c) + "," + std::to_string(max_c) + "}");
         }
         auto rep = std::make_shared<RegexASTNode>();
         rep->type = RegexASTType::Repeat;
@@ -244,6 +256,9 @@ Regex::Regex(std::string_view pattern) : pattern_(pattern) {
 }
 
 int Regex::new_nfa_state() {
+    if (nfa_states_.size() >= 2048) {
+        throw std::runtime_error("NFA state explosion limit exceeded (max 2048 states)");
+    }
     int id = static_cast<int>(nfa_states_.size());
     nfa_states_.push_back(NFAState{.id = id, .is_match = false, .transitions = {}});
     return id;
@@ -428,6 +443,9 @@ int Regex::get_or_create_dfa_state(const std::vector<int>& nfa_set) {
     }
 
     int dfa_id = static_cast<int>(dfa_states_.size());
+    if (dfa_states_.size() >= 2048) {
+        throw std::runtime_error("DFA state explosion limit exceeded (max 2048 states)");
+    }
     DFAState dfa_state{.id = dfa_id, .is_match = false, .transitions = {}};
     dfa_state.transitions.fill(-2);  // -2 indicates uncomputed transition
 

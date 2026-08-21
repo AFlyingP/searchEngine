@@ -119,6 +119,7 @@ std::vector<Token> Analyzer::analyze(std::string_view text) const {
         const size_t token_end = i;
         std::string_view raw_word(text.data() + token_start, token_end - token_start);
 
+        const uint32_t current_pos = pos++;
         std::string lowered = Utf8Decoder::to_lower_utf8(raw_word);
         if (filter_stopwords_ && is_stopword(lowered)) {
             continue;
@@ -126,7 +127,7 @@ std::vector<Token> Analyzer::analyze(std::string_view text) const {
 
         std::string term = enable_stemming_ ? PorterStemmer::stem(lowered) : lowered;
         tokens.push_back(Token{.term = std::move(term),
-                               .position = pos++,
+                               .position = current_pos,
                                .start_offset = static_cast<uint32_t>(token_start),
                                .end_offset = static_cast<uint32_t>(token_end)});
     }

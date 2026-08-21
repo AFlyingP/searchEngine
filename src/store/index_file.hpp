@@ -16,7 +16,7 @@
 namespace needlefish {
 
 constexpr char INDEX_MAGIC[8] = {'N', 'F', 'L', 'S', 'H', 'I', 'D', 'X'};
-constexpr uint32_t INDEX_VERSION = 1;
+constexpr uint32_t INDEX_VERSION = 2;
 
 enum class SectionId : uint32_t {
     Stats = 1,
@@ -47,6 +47,8 @@ struct alignas(8) Bm25Stats {
     uint32_t total_docs{0};
     uint64_t total_tokens{0};
     double avg_doc_len{0.0};
+    float k1{0.9f};
+    float b{0.4f};
 };
 
 struct alignas(8) DocMetadataRecord {
@@ -75,6 +77,7 @@ class IndexView {
     [[nodiscard]] double avg_doc_len() const noexcept { return stats_.avg_doc_len; }
 
     [[nodiscard]] const DocMetadataRecord& doc_metadata(uint32_t doc_id) const;
+    [[nodiscard]] uint32_t external_id(uint32_t internal_id) const noexcept;
     [[nodiscard]] std::string_view doc_title(uint32_t doc_id) const;
     [[nodiscard]] std::string_view doc_text(uint32_t doc_id) const;
 
@@ -94,6 +97,7 @@ class IndexView {
         return stored_fields_span_;
     }
     [[nodiscard]] size_t file_size() const noexcept { return mmap_.size(); }
+    [[nodiscard]] uint32_t checksum() const noexcept { return index_checksum_; }
 
   private:
     void parse_sections(std::span<const uint8_t> data);
@@ -106,6 +110,7 @@ class IndexView {
     std::span<const uint8_t> positions_span_{};
     RadixTrie trie_{};
     std::unique_ptr<FMIndex> fm_index_{};
+    uint32_t index_checksum_{0};
 };
 
 }  // namespace needlefish

@@ -2,14 +2,26 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // Proxy REST API calls to the live C++ backend tunnel
+    // Proxy REST API calls to the configured C++ backend
     if (url.pathname.startsWith('/api/')) {
-      const backend = env.BACKEND_URL || "https://persistent-mambo-shelf-correctly.trycloudflare.com";
+      const backend = env.BACKEND_URL;
+      if (!backend) {
+        return new Response(JSON.stringify({ error: "Backend search engine not configured. Set BACKEND_URL environment variable." }), {
+          status: 503,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+
       try {
         const targetUrl = new URL(url.pathname + url.search, backend);
+        const headers = new Headers(request.headers);
+        // Strip sensitive / client credentials before forwarding
+        headers.delete('Cookie');
+        headers.delete('Authorization');
+
         const proxyReq = new Request(targetUrl.toString(), {
           method: request.method,
-          headers: request.headers,
+          headers: headers,
           body: (request.method !== 'GET' && request.method !== 'HEAD') ? request.body : undefined
         });
         const resp = await fetch(proxyReq);

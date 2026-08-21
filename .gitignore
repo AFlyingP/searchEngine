@@ -31,3 +31,5 @@ plots/*.png
 *.bz2
 *.jsonl
 cloudflared.exe
+__pycache__/
+*.pyc

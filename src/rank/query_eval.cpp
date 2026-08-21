@@ -20,8 +20,11 @@ QueryResult QueryEvaluator::search_disjunction(std::span<const std::string> term
 
     std::vector<ScoredTermReader> readers;
     for (const auto& raw_t : terms) {
-        std::string term = analyzer_.normalize_term(raw_t);
-        const auto payload = index_.term_dict().lookup(term);
+        auto payload = index_.term_dict().lookup(raw_t);
+        if (!payload.valid()) {
+            std::string term = analyzer_.normalize_term(raw_t);
+            payload = index_.term_dict().lookup(term);
+        }
         if (payload.valid()) {
             const double idf = BM25Scorer::compute_idf(payload.doc_freq, index_.total_docs());
             readers.push_back(ScoredTermReader{.reader = index_.get_posting_reader(payload),
@@ -60,8 +63,11 @@ QueryResult QueryEvaluator::search_conjunction(std::span<const std::string> term
 
     std::vector<ScoredTermReader> readers;
     for (const auto& raw_t : terms) {
-        std::string term = analyzer_.normalize_term(raw_t);
-        const auto payload = index_.term_dict().lookup(term);
+        auto payload = index_.term_dict().lookup(raw_t);
+        if (!payload.valid()) {
+            std::string term = analyzer_.normalize_term(raw_t);
+            payload = index_.term_dict().lookup(term);
+        }
         if (!payload.valid()) {
             // One term missing -> conjunction intersection is empty
             const auto end_time = std::chrono::high_resolution_clock::now();
@@ -163,7 +169,12 @@ QueryResult QueryEvaluator::search_phrase(std::span<const std::string> terms, si
                                            .term_max_score = payload.max_term_score});
     }
 
-    auto cmp = [](const SearchHit& a, const SearchHit& b) { return a.score > b.score; };
+    auto cmp = [](const SearchHit& a, const SearchHit& b) {
+        if (a.score != b.score) {
+            return a.score > b.score;
+        }
+        return a.doc_id < b.doc_id;
+    };
     std::priority_queue<SearchHit, std::vector<SearchHit>, decltype(cmp)> heap(cmp);
 
     const double avg_doc_len = index_.avg_doc_len();
@@ -266,18 +277,85 @@ QueryResult QueryEvaluator::search(std::string_view query_str, size_t k, bool us
         return search_phrase(terms, k);
     }
 
-    // Parse bare terms and negations
-    auto tokens = analyzer_.analyze(query_str);
+    // Split words to detect negated terms ("-term") and "OR" operator
     std::vector<std::string> positive_terms;
-    for (const auto& tok : tokens) {
-        positive_terms.push_back(tok.term);
+    std::vector<std::string> negated_terms;
+    bool has_or = false;
+
+    std::string q_str(query_str);
+    std::istringstream iss(q_str);
+    std::string token;
+    while (iss >> token) {
+        if (token == "OR" || token == "or") {
+            has_or = true;
+            continue;
+        }
+        if (token.size() > 1 && token.front() == '-') {
+            auto neg_toks = analyzer_.analyze(token.substr(1));
+            for (const auto& t : neg_toks) {
+                negated_terms.push_back(t.term);
+            }
+        } else {
+            auto pos_toks = analyzer_.analyze(token);
+            for (const auto& t : pos_toks) {
+                positive_terms.push_back(t.term);
+            }
+        }
     }
 
     if (positive_terms.empty()) {
         return QueryResult{};
     }
 
-    return search_disjunction(positive_terms, k, use_wand);
+    QueryResult base_res;
+    if (has_or || use_wand) {
+        base_res = search_disjunction(positive_terms, k + negated_terms.size() * 5, use_wand);
+    } else {
+        base_res = search_conjunction(positive_terms, k + negated_terms.size() * 5);
+    }
+
+    if (negated_terms.empty() || base_res.hits.empty()) {
+        if (base_res.hits.size() > k) {
+            base_res.hits.resize(k);
+        }
+        return base_res;
+    }
+
+    // Filter out hits matching negated terms
+    std::vector<PostingListReader> neg_readers;
+    for (const auto& nt : negated_terms) {
+        const auto payload = index_.term_dict().lookup(nt);
+        if (payload.valid()) {
+            neg_readers.push_back(index_.get_posting_reader(payload));
+        }
+    }
+
+    if (neg_readers.empty()) {
+        if (base_res.hits.size() > k) {
+            base_res.hits.resize(k);
+        }
+        return base_res;
+    }
+
+    std::vector<SearchHit> filtered_hits;
+    for (const auto& hit : base_res.hits) {
+        bool matches_neg = false;
+        for (auto& nr : neg_readers) {
+            nr.advance(hit.doc_id);
+            if (nr.valid() && nr.doc_id() == hit.doc_id) {
+                matches_neg = true;
+                break;
+            }
+        }
+        if (!matches_neg) {
+            filtered_hits.push_back(hit);
+            if (filtered_hits.size() == k) break;
+        }
+    }
+
+    base_res.hits = std::move(filtered_hits);
+    base_res.total_estimate = base_res.hits.size();
+    return base_res;
 }
 
 }  // namespace needlefish

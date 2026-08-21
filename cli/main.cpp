@@ -100,12 +100,23 @@ int cmd_search(int argc, char* argv[]) {
             if (i + 1 < argc)
                 query_str = argv[++i];
         } else if (arg == "--k" || arg == "-k") {
-            if (i + 1 < argc)
-                top_k = std::stoul(argv[++i]);
+            if (i + 1 < argc) {
+                try {
+                    long long parsed = std::stoll(argv[++i]);
+                    top_k = static_cast<size_t>(std::clamp<long long>(parsed, 1, 1000));
+                } catch (...) {
+                    top_k = 10;
+                }
+            }
         } else if (arg == "--fuzzy" || arg == "-f") {
             fuzzy_dist = 2;
             if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') {
-                fuzzy_dist = std::stoul(argv[++i]);
+                try {
+                    long long parsed = std::stoll(argv[++i]);
+                    fuzzy_dist = static_cast<size_t>(std::clamp<long long>(parsed, 0, 2));
+                } catch (...) {
+                    fuzzy_dist = 2;
+                }
             }
         } else if (arg == "--regex" || arg == "-r") {
             force_regex = true;
@@ -168,7 +179,7 @@ int cmd_search(int argc, char* argv[]) {
         std::string snippet = snippet_gen.highlight(text, qterms);
 
         std::cout << "  [" << (rank + 1) << "] (Score: " << std::fixed << std::setprecision(4)
-                  << hit.score << ", DocID: " << hit.doc_id << ")\n";
+                  << hit.score << ", DocID: " << index.external_id(hit.doc_id) << ")\n";
         std::cout << "      Title:   " << (title.empty() ? "(Untitled)" : title) << "\n";
         std::cout << "      Snippet: " << snippet << "\n\n";
     }
@@ -194,11 +205,23 @@ int cmd_suggest(int argc, char* argv[]) {
         } else if (arg == "--fuzzy" || arg == "-f") {
             is_fuzzy = true;
         } else if (arg == "--max-dist" || arg == "-d") {
-            if (i + 1 < argc)
-                max_dist = std::stoul(argv[++i]);
+            if (i + 1 < argc) {
+                try {
+                    long long parsed = std::stoll(argv[++i]);
+                    max_dist = static_cast<size_t>(std::clamp<long long>(parsed, 0, 2));
+                } catch (...) {
+                    max_dist = 2;
+                }
+            }
         } else if (arg == "--k" || arg == "-k") {
-            if (i + 1 < argc)
-                top_k = std::stoul(argv[++i]);
+            if (i + 1 < argc) {
+                try {
+                    long long parsed = std::stoll(argv[++i]);
+                    top_k = static_cast<size_t>(std::clamp<long long>(parsed, 1, 100));
+                } catch (...) {
+                    top_k = 10;
+                }
+            }
         }
     }
 
@@ -293,8 +316,14 @@ int cmd_serve(int argc, char* argv[]) {
             if (i + 1 < argc)
                 host = argv[++i];
         } else if (arg == "--port" || arg == "-p") {
-            if (i + 1 < argc)
-                port = static_cast<uint16_t>(std::stoul(argv[++i]));
+            if (i + 1 < argc) {
+                try {
+                    long long parsed = std::stoll(argv[++i]);
+                    port = static_cast<uint16_t>(std::clamp<long long>(parsed, 1, 65535));
+                } catch (...) {
+                    port = 8080;
+                }
+            }
         } else if (arg == "--web-dir" || arg == "-w") {
             if (i + 1 < argc)
                 web_dir = argv[++i];

@@ -21,7 +21,7 @@
                          v                                                       v
          +-------------------------------+                       +-------------------------------+
          |    Ranked Retrieval Engine    |                       |   Fuzzy & Automata Engine     |
-         |    - Okapi BM25 Scorer        |                       |   - Schulz-Mihov DFA (k=1,2)  |
+         |    - Okapi BM25 Scorer        |                       |   - Levenshtein DP-Row (k=1,2)|
          |    - Block-Max WAND Pruner    |                       |   - Flattened Radix Trie      |
          |    - SIMD-BP128 Postings      |                       |   - Regex NFA/DFA Search      |
          +-------------------------------+                       +-------------------------------+
@@ -40,7 +40,7 @@
                                                      v
                                   +---------------------------------------+
                                   |   Single-File Zero-Copy Storage       |
-                                  |   - Fixed 64-byte Header (NFI\x01)    |
+                                  |   - Fixed Header (NFLSHIDX, v2)       |
                                   |   - 64-byte Cache-Aligned Sections    |
                                   |   - Zero Heap Allocation on Startup   |
                                   +---------------------------------------+
