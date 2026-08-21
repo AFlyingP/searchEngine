@@ -2,13 +2,18 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <sstream>
+#include <thread>
 
 #include "rank/snippet.hpp"
 
@@ -46,20 +51,27 @@ namespace needlefish {
 
 namespace {
 
-std::string url_decode(std::string_view src) {
+int hex_val(char c) noexcept {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+std::string url_decode(std::string_view src, bool is_query = false) {
     std::string dst;
     dst.reserve(src.size());
     for (size_t i = 0; i < src.size(); ++i) {
         if (src[i] == '%' && i + 2 < src.size()) {
-            int val = 0;
-            std::istringstream is(std::string(src.substr(i + 1, 2)));
-            if (is >> std::hex >> val) {
-                dst.push_back(static_cast<char>(val));
+            int h1 = hex_val(src[i + 1]);
+            int h2 = hex_val(src[i + 2]);
+            if (h1 >= 0 && h2 >= 0) {
+                dst.push_back(static_cast<char>((h1 << 4) | h2));
                 i += 2;
-            } else {
-                dst.push_back(src[i]);
+                continue;
             }
-        } else if (src[i] == '+') {
+        }
+        if (src[i] == '+' && is_query) {
             dst.push_back(' ');
         } else {
             dst.push_back(src[i]);
@@ -126,6 +138,32 @@ std::string get_mime_type(std::string_view path) {
     return "application/octet-stream";
 }
 
+// Token bucket rate limiter per client IP
+struct RateLimiter {
+    struct Bucket {
+        double tokens{20.0};
+        std::chrono::steady_clock::time_point last_update{std::chrono::steady_clock::now()};
+    };
+    std::mutex mtx;
+    std::unordered_map<std::string, Bucket> buckets;
+
+    bool allow(const std::string& ip) {
+        std::lock_guard<std::mutex> lock(mtx);
+        auto now = std::chrono::steady_clock::now();
+        auto& b = buckets[ip];
+        double elapsed = std::chrono::duration<double>(now - b.last_update).count();
+        b.last_update = now;
+        b.tokens = std::min(20.0, b.tokens + elapsed * 10.0);  // 10 QPS fill rate
+        if (b.tokens >= 1.0) {
+            b.tokens -= 1.0;
+            return true;
+        }
+        return false;
+    }
+};
+
+RateLimiter g_rate_limiter;
+
 }  // namespace
 
 std::string HttpResponse::to_http_string() const {
@@ -170,10 +208,10 @@ HttpServer::HttpServer(HttpServer&& other) noexcept
     , host_(std::move(other.host_))
     , port_(other.port_)
     , static_dir_(std::move(other.static_dir_))
-    , is_running_(other.is_running_)
+    , is_running_(other.is_running_.load())
     , server_socket_(other.server_socket_) {
     other.server_socket_ = static_cast<uintptr_t>(INVALID_SOCK);
-    other.is_running_ = false;
+    other.is_running_.store(false);
 }
 
 HttpServer& HttpServer::operator=(HttpServer&& other) noexcept {
@@ -182,10 +220,10 @@ HttpServer& HttpServer::operator=(HttpServer&& other) noexcept {
         host_ = std::move(other.host_);
         port_ = other.port_;
         static_dir_ = std::move(other.static_dir_);
-        is_running_ = other.is_running_;
+        is_running_.store(other.is_running_.load());
         server_socket_ = other.server_socket_;
         other.server_socket_ = static_cast<uintptr_t>(INVALID_SOCK);
-        other.is_running_ = false;
+        other.is_running_.store(false);
     }
     return *this;
 }
@@ -220,7 +258,7 @@ HttpRequest HttpServer::parse_request(std::string_view raw_request) {
 
     size_t q_pos = full_target.find('?');
     if (q_pos != std::string_view::npos) {
-        req.path = url_decode(full_target.substr(0, q_pos));
+        req.path = url_decode(full_target.substr(0, q_pos), false);
         req.raw_query = std::string(full_target.substr(q_pos + 1));
 
         std::string_view q_rem = req.raw_query;
@@ -229,22 +267,41 @@ HttpRequest HttpServer::parse_request(std::string_view raw_request) {
             std::string_view pair = (amp == std::string_view::npos) ? q_rem : q_rem.substr(0, amp);
             size_t eq = pair.find('=');
             if (eq != std::string_view::npos) {
-                std::string k = url_decode(pair.substr(0, eq));
-                std::string v = url_decode(pair.substr(eq + 1));
+                std::string k = url_decode(pair.substr(0, eq), true);
+                std::string v = url_decode(pair.substr(eq + 1), true);
                 req.query_params[k] = v;
             } else {
-                req.query_params[url_decode(pair)] = "";
+                req.query_params[url_decode(pair, true)] = "";
             }
             if (amp == std::string_view::npos)
                 break;
             q_rem = q_rem.substr(amp + 1);
         }
     } else {
-        req.path = url_decode(full_target);
+        req.path = url_decode(full_target, false);
     }
 
+    // Parse headers
     size_t header_start = line_end + (raw_request[line_end] == '\r' ? 2 : 1);
     size_t body_sep = raw_request.find("\r\n\r\n", header_start);
+    size_t headers_end = (body_sep != std::string_view::npos) ? body_sep : raw_request.size();
+
+    std::string_view headers_block = raw_request.substr(header_start, headers_end - header_start);
+    while (!headers_block.empty()) {
+        size_t next_line = headers_block.find("\r\n");
+        std::string_view hline = (next_line != std::string_view::npos) ? headers_block.substr(0, next_line) : headers_block;
+        size_t colon = hline.find(':');
+        if (colon != std::string_view::npos) {
+            std::string hname = std::string(hline.substr(0, colon));
+            std::transform(hname.begin(), hname.end(), hname.begin(), [](unsigned char c) { return std::tolower(c); });
+            size_t val_start = hline.find_first_not_of(" \t", colon + 1);
+            std::string hval = (val_start != std::string_view::npos) ? std::string(hline.substr(val_start)) : "";
+            req.headers[hname] = hval;
+        }
+        if (next_line == std::string_view::npos) break;
+        headers_block = headers_block.substr(next_line + 2);
+    }
+
     if (body_sep != std::string_view::npos) {
         req.body = std::string(raw_request.substr(body_sep + 4));
     }
@@ -261,15 +318,22 @@ HttpResponse HttpServer::handle_api_search(const HttpRequest& req) const {
     }
 
     const std::string& query_str = q_it->second;
+    if (query_str.size() > 256) {
+        return HttpResponse{.status_code = 400,
+                            .status_text = "Bad Request",
+                            .body = "{\"error\": \"Query length exceeds maximum limit of 256 characters\"}"};
+    }
+
     size_t limit = 10;
-    auto limit_it = req.query_params.find("limit");
-    if (limit_it != req.query_params.end()) {
+    auto k_it = req.query_params.find("k");
+    if (k_it == req.query_params.end()) {
+        k_it = req.query_params.find("limit");
+    }
+    if (k_it != req.query_params.end()) {
         try {
-            limit = std::stoul(limit_it->second);
-            if (limit == 0)
-                limit = 10;
-            if (limit > 100)
-                limit = 100;
+            limit = std::stoul(k_it->second);
+            if (limit == 0) limit = 10;
+            if (limit > 100) limit = 100;
         } catch (...) {
             limit = 10;
         }
@@ -281,9 +345,19 @@ HttpResponse HttpServer::handle_api_search(const HttpRequest& req) const {
         mode = mode_it->second;
     }
 
+    size_t fuzzy_dist = 0;
+    auto fuzzy_it = req.query_params.find("fuzzy");
+    if (fuzzy_it != req.query_params.end()) {
+        try {
+            fuzzy_dist = std::min<size_t>(2, std::stoul(fuzzy_it->second));
+        } catch (...) {
+            fuzzy_dist = 0;
+        }
+    }
+
     HybridSearchResult result;
-    if (mode == "fuzzy") {
-        result = engine_.search_fuzzy(query_str, 2, limit);
+    if (fuzzy_dist > 0 || mode == "fuzzy") {
+        result = engine_.search_fuzzy(query_str, fuzzy_dist > 0 ? fuzzy_dist : 2, limit);
     } else if (mode == "regex") {
         result = engine_.search_regex(query_str, limit);
     } else if (mode == "substring") {
@@ -314,7 +388,9 @@ HttpResponse HttpServer::handle_api_search(const HttpRequest& req) const {
     json << "  \"mode\": \"" << mode_str << "\",\n";
     json << "  \"took_us\": " << result.took_us << ",\n";
     json << "  \"took_ms\": " << (static_cast<double>(result.took_us) / 1000.0) << ",\n";
+    json << "  \"total_estimate\": " << result.hits.size() << ",\n";
     json << "  \"total_hits\": " << result.hits.size() << ",\n";
+    json << "  \"corrected\": \"" << json_escape(result.correction_suggestion) << "\",\n";
     json << "  \"did_you_mean\": \"" << json_escape(result.correction_suggestion) << "\",\n";
     json << "  \"hits\": [\n";
 
@@ -331,11 +407,14 @@ HttpResponse HttpServer::handle_api_search(const HttpRequest& req) const {
         std::string_view title = index_.doc_title(hit.doc_id);
         std::string_view text = index_.doc_text(hit.doc_id);
         std::string snippet = snippet_gen.highlight(text, qterms);
+        uint32_t ext_id = index_.external_id(hit.doc_id);
+        float safe_score = (std::isnan(hit.score) || std::isinf(hit.score)) ? 0.0f : hit.score;
 
         json << "    {\n";
         json << "      \"rank\": " << (i + 1) << ",\n";
-        json << "      \"doc_id\": " << hit.doc_id << ",\n";
-        json << "      \"score\": " << hit.score << ",\n";
+        json << "      \"id\": " << ext_id << ",\n";
+        json << "      \"doc_id\": " << ext_id << ",\n";
+        json << "      \"score\": " << safe_score << ",\n";
         json << "      \"title\": \"" << json_escape(title) << "\",\n";
         json << "      \"snippet\": \"" << json_escape(snippet) << "\"\n";
         json << "    }" << (i + 1 < result.hits.size() ? "," : "") << "\n";
@@ -349,6 +428,9 @@ HttpResponse HttpServer::handle_api_search(const HttpRequest& req) const {
 
 HttpResponse HttpServer::handle_api_suggest(const HttpRequest& req) const {
     auto q_it = req.query_params.find("q");
+    if (q_it == req.query_params.end()) {
+        q_it = req.query_params.find("prefix");
+    }
     if (q_it == req.query_params.end() || q_it->second.empty()) {
         return HttpResponse{.status_code = 400,
                             .status_text = "Bad Request",
@@ -356,6 +438,12 @@ HttpResponse HttpServer::handle_api_suggest(const HttpRequest& req) const {
     }
 
     const std::string& prefix = q_it->second;
+    if (prefix.size() > 256) {
+        return HttpResponse{.status_code = 400,
+                            .status_text = "Bad Request",
+                            .body = "{\"error\": \"Query length exceeds maximum limit of 256 characters\"}"};
+    }
+
     bool fuzzy = false;
     auto fuzzy_it = req.query_params.find("fuzzy");
     if (fuzzy_it != req.query_params.end() &&
@@ -363,16 +451,21 @@ HttpResponse HttpServer::handle_api_suggest(const HttpRequest& req) const {
         fuzzy = true;
     }
 
+    const auto t0 = std::chrono::high_resolution_clock::now();
     std::vector<Suggestion> suggestions;
     if (fuzzy) {
         suggestions = engine_.autocomplete().fuzzy_suggest(prefix, 2, 8);
     } else {
         suggestions = engine_.autocomplete().prefix_suggest(prefix, 8);
     }
+    const auto t1 = std::chrono::high_resolution_clock::now();
+    const uint64_t took_us = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count());
 
     std::ostringstream json;
     json << "{\n";
     json << "  \"query\": \"" << json_escape(prefix) << "\",\n";
+    json << "  \"took_us\": " << took_us << ",\n";
     json << "  \"suggestions\": [\n";
 
     for (size_t i = 0; i < suggestions.size(); ++i) {
@@ -406,12 +499,28 @@ HttpResponse HttpServer::handle_api_stats(const HttpRequest&) const {
     return HttpResponse{.status_code = 200, .status_text = "OK", .body = json.str()};
 }
 
+HttpResponse HttpServer::handle_api_health(const HttpRequest&) const {
+    auto now = std::chrono::steady_clock::now();
+    uint64_t uptime_sec = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(now - start_time_).count());
+
+    std::ostringstream json;
+    json << "{\n";
+    json << "  \"status\": \"healthy\",\n";
+    json << "  \"version\": \"1.0.0\",\n";
+    json << "  \"index_checksum\": " << index_.checksum() << ",\n";
+    json << "  \"total_docs\": " << index_.total_docs() << ",\n";
+    json << "  \"uptime_seconds\": " << uptime_sec << "\n";
+    json << "}\n";
+
+    return HttpResponse{.status_code = 200, .status_text = "OK", .body = json.str()};
+}
+
 HttpResponse HttpServer::handle_static_file(std::string_view path) const {
     if (path == "/" || path.empty()) {
         path = "/index.html";
     }
 
-    // Reject path traversal attempts explicitly
     if (path.find("..") != std::string_view::npos || path.find('\\') != std::string_view::npos) {
         return HttpResponse{.status_code = 403,
                             .status_text = "Forbidden",
@@ -434,7 +543,6 @@ HttpResponse HttpServer::handle_static_file(std::string_view path) const {
                             .body = "400 Bad Request"};
     }
 
-    // Verify canonical path is strictly contained within base_dir
     auto base_str = base_dir.string();
     auto cand_str = candidate_path.string();
     if (!cand_str.starts_with(base_str)) {
@@ -467,21 +575,36 @@ HttpResponse HttpServer::handle_static_file(std::string_view path) const {
 }
 
 HttpResponse HttpServer::handle_request(const HttpRequest& req) const {
-    if (req.method == "OPTIONS") {
-        return HttpResponse{.status_code = 204, .status_text = "No Content", .body = ""};
-    }
+    try {
+        if (req.method == "OPTIONS") {
+            return HttpResponse{.status_code = 204, .status_text = "No Content", .body = ""};
+        }
 
-    if (req.path == "/api/search") {
-        return handle_api_search(req);
-    }
-    if (req.path == "/api/suggest") {
-        return handle_api_suggest(req);
-    }
-    if (req.path == "/api/stats") {
-        return handle_api_stats(req);
-    }
+        if (req.path == "/api/search") {
+            return handle_api_search(req);
+        }
+        if (req.path == "/api/suggest") {
+            return handle_api_suggest(req);
+        }
+        if (req.path == "/api/stats") {
+            return handle_api_stats(req);
+        }
+        if (req.path == "/api/health") {
+            return handle_api_health(req);
+        }
 
-    return handle_static_file(req.path);
+        return handle_static_file(req.path);
+    } catch (const std::exception& e) {
+        std::ostringstream json;
+        json << "{\"error\": \"" << json_escape(e.what()) << "\"}";
+        return HttpResponse{.status_code = 400,
+                            .status_text = "Bad Request",
+                            .body = json.str()};
+    } catch (...) {
+        return HttpResponse{.status_code = 500,
+                            .status_text = "Internal Server Error",
+                            .body = "{\"error\": \"Internal server error\"}"};
+    }
 }
 
 void HttpServer::start() {
@@ -505,7 +628,10 @@ void HttpServer::start() {
     if (host_ == "0.0.0.0" || host_ == "*" || host_.empty()) {
         server_addr.sin_addr.s_addr = INADDR_ANY;
     } else {
-        inet_pton(AF_INET, host_.c_str(), &server_addr.sin_addr);
+        if (inet_pton(AF_INET, host_.c_str(), &server_addr.sin_addr) <= 0) {
+            std::cerr << "Invalid host address: " << host_ << ", falling back to 0.0.0.0" << std::endl;
+            server_addr.sin_addr.s_addr = INADDR_ANY;
+        }
     }
 
     if (bind(listen_fd, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) ==
@@ -530,44 +656,106 @@ void HttpServer::start() {
     }
 
     server_socket_ = static_cast<uintptr_t>(listen_fd);
-    is_running_ = true;
+    is_running_.store(true);
+    start_time_ = std::chrono::steady_clock::now();
 
     std::cout << "Needlefish search server running on http://" << host_ << ":" << port_
               << std::endl;
     std::cout << "Serving static assets from ./" << static_dir_ << "/" << std::endl;
 
-    while (is_running_) {
+    while (is_running_.load()) {
         sockaddr_in client_addr{};
         socklen_t client_len = sizeof(client_addr);
         socket_t client_fd =
             accept(listen_fd, reinterpret_cast<sockaddr*>(&client_addr), &client_len);
         if (client_fd == INVALID_SOCK) {
-            if (!is_running_)
+            if (!is_running_.load())
                 break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+
+        char client_ip[INET_ADDRSTRLEN] = "127.0.0.1";
+        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, sizeof(client_ip));
+        std::string ip_str(client_ip);
+
+        if (!g_rate_limiter.allow(ip_str)) {
+            HttpResponse resp{.status_code = 429,
+                              .status_text = "Too Many Requests",
+                              .body = "{\"error\": \"Rate limit exceeded. Maximum 10 QPS allowed.\"}"};
+            std::string raw_resp = resp.to_http_string();
+            send(client_fd, raw_resp.data(), static_cast<send_len_t>(raw_resp.size()), 0);
+#if defined(_WIN32) || defined(_WIN64)
+            shutdown(client_fd, SD_BOTH);
+            closesocket(client_fd);
+#else
+            shutdown(client_fd, SHUT_RDWR);
+            close(client_fd);
+#endif
             continue;
         }
 
 #if defined(_WIN32) || defined(_WIN64)
-        DWORD timeout_ms = 3000;
+        DWORD timeout_ms = 5000;
         setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout_ms),
                    sizeof(timeout_ms));
         setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout_ms),
                    sizeof(timeout_ms));
 #else
         struct timeval tv;
-        tv.tv_sec = 3;
+        tv.tv_sec = 5;
         tv.tv_usec = 0;
         setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 #endif
 
-        std::array<char, 4096> buffer{};
-        sock_ssize_t bytes_read =
-            recv(client_fd, buffer.data(), static_cast<recv_len_t>(buffer.size() - 1), 0);
-        if (bytes_read > 0) {
-            buffer[static_cast<size_t>(bytes_read)] = '\0';
-            HttpRequest req =
-                parse_request(std::string_view(buffer.data(), static_cast<size_t>(bytes_read)));
+        // Framing loop: read until headers and Content-Length body are received
+        std::string raw_request;
+        raw_request.reserve(4096);
+        std::array<char, 2048> chunk{};
+        size_t expected_total_size = 0;
+        bool headers_complete = false;
+
+        while (raw_request.size() < 65536) {
+            sock_ssize_t bytes_read =
+                recv(client_fd, chunk.data(), static_cast<recv_len_t>(chunk.size()), 0);
+            if (bytes_read <= 0) {
+                break;
+            }
+            raw_request.append(chunk.data(), static_cast<size_t>(bytes_read));
+
+            if (!headers_complete) {
+                size_t sep = raw_request.find("\r\n\r\n");
+                if (sep != std::string::npos) {
+                    headers_complete = true;
+                    size_t body_start = sep + 4;
+                    // Check for Content-Length
+                    size_t cl_pos = raw_request.find("Content-Length:");
+                    if (cl_pos == std::string::npos) {
+                        cl_pos = raw_request.find("content-length:");
+                    }
+                    if (cl_pos != std::string::npos && cl_pos < sep) {
+                        size_t val_s = raw_request.find_first_not_of(" \t", cl_pos + 15);
+                        size_t val_e = raw_request.find("\r\n", val_s);
+                        try {
+                            size_t cl = std::stoul(raw_request.substr(val_s, val_e - val_s));
+                            expected_total_size = body_start + cl;
+                        } catch (...) {
+                            expected_total_size = body_start;
+                        }
+                    } else {
+                        expected_total_size = body_start;
+                    }
+                }
+            }
+
+            if (headers_complete && raw_request.size() >= expected_total_size) {
+                break;
+            }
+        }
+
+        if (!raw_request.empty()) {
+            HttpRequest req = parse_request(raw_request);
             HttpResponse resp = handle_request(req);
             std::string raw_resp = resp.to_http_string();
             size_t total_sent = 0;
@@ -592,7 +780,7 @@ void HttpServer::start() {
 
 void HttpServer::stop() {
     if (server_socket_ != static_cast<uintptr_t>(INVALID_SOCK)) {
-        is_running_ = false;
+        is_running_.store(false);
 #if defined(_WIN32) || defined(_WIN64)
         closesocket(static_cast<socket_t>(server_socket_));
 #else

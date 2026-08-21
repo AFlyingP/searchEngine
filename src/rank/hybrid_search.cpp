@@ -50,14 +50,19 @@ HybridSearchResult HybridSearchEngine::search(std::string_view query_str, size_t
         const size_t tilde_pos = clean_query.find('~');
         if (tilde_pos != std::string::npos) {
             if (tilde_pos + 1 < clean_query.size()) {
+                std::string num_str = clean_query.substr(tilde_pos + 1);
                 try {
-                    dist = static_cast<size_t>(std::stoul(clean_query.substr(tilde_pos + 1)));
+                    long long parsed = std::stoll(num_str);
+                    if (parsed < 0) parsed = 0;
+                    if (parsed > 2) parsed = 2;
+                    dist = static_cast<size_t>(parsed);
                 } catch (...) {
                     dist = 2;
                 }
             }
             clean_query = clean_query.substr(0, tilde_pos);
         }
+        if (dist > 2) dist = 2;
         return search_fuzzy(clean_query, dist, top_k);
     }
 
@@ -83,6 +88,7 @@ HybridSearchResult HybridSearchEngine::search(std::string_view query_str, size_t
 
 HybridSearchResult HybridSearchEngine::search_fuzzy(std::string_view query_str, size_t max_distance,
                                                     size_t top_k) {
+    if (max_distance > 2) max_distance = 2;
     const auto t0 = std::chrono::high_resolution_clock::now();
 
     auto tokens = analyzer_.analyze(query_str);
@@ -99,8 +105,10 @@ HybridSearchResult HybridSearchEngine::search_fuzzy(std::string_view query_str, 
         for (const auto& m : matches) {
             if (seen_terms.insert(m.term).second) {
                 expanded_terms.push_back(m.term);
+                if (expanded_terms.size() >= 50) break;
             }
         }
+        if (expanded_terms.size() >= 50) break;
     }
 
     auto eval_res = query_eval_.search_disjunction(expanded_terms, top_k, /*use_wand=*/true);

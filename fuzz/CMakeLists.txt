@@ -5,6 +5,7 @@ set(FUZZ_TARGETS
     fuzz_analyzer
     fuzz_index_loader
     fuzz_levenshtein
+    fuzz_regex
 )
 
 foreach(target ${FUZZ_TARGETS})

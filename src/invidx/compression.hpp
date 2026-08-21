@@ -15,6 +15,7 @@ class Varint {
   public:
     static size_t encode_uint32(uint32_t val, uint8_t* out) noexcept;
     static size_t decode_uint32(const uint8_t* in, uint32_t* val) noexcept;
+    static size_t decode_uint32(const uint8_t* in, const uint8_t* end, uint32_t* val) noexcept;
 
     static void encode_sequence(std::span<const uint32_t> values, std::vector<uint8_t>& out);
     static void decode_sequence(std::span<const uint8_t> in, size_t count,

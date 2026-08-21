@@ -48,8 +48,19 @@ TEST(PorterStemmerTest, BasicWords) {
 }
 
 TEST(PorterStemmerTest, OfficialGoldenSuite) {
-    const std::filesystem::path voc_path = "tests/golden/porter/voc.txt";
-    const std::filesystem::path out_path = "tests/golden/porter/output.txt";
+    std::vector<std::filesystem::path> search_prefixes = {
+        ".", "..", "../..", "../../..", "../../../.."
+    };
+    std::filesystem::path voc_path, out_path;
+    for (const auto& prefix : search_prefixes) {
+        auto v = prefix / std::filesystem::path("tests/golden/porter/voc.txt");
+        auto o = prefix / std::filesystem::path("tests/golden/porter/output.txt");
+        if (std::filesystem::exists(v) && std::filesystem::exists(o)) {
+            voc_path = v;
+            out_path = o;
+            break;
+        }
+    }
 
     std::ifstream voc_file(voc_path);
     std::ifstream out_file(out_path);
@@ -92,12 +103,13 @@ TEST(AnalyzerTest, TokenizationAndStopwords) {
     std::string sample = "The quick brown fox jumps over the lazy dog.";
     auto tokens = analyzer.analyze(sample);
 
-    // "the", "over" are stopwords
+    // "The" (pos 0), "over" (pos 5), "the" (pos 6) are stopwords
     std::vector<std::string> expected_terms = {"quick", "brown", "fox", "jump", "lazi", "dog"};
+    std::vector<uint32_t> expected_positions = {1, 2, 3, 4, 7, 8};
     ASSERT_EQ(tokens.size(), expected_terms.size());
 
     for (size_t i = 0; i < tokens.size(); ++i) {
         EXPECT_EQ(tokens[i].term, expected_terms[i]);
-        EXPECT_EQ(tokens[i].position, static_cast<uint32_t>(i));
+        EXPECT_EQ(tokens[i].position, expected_positions[i]);
     }
 }

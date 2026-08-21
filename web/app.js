@@ -240,15 +240,26 @@
     });
   }
 
+  let activeSuggestController = null;
+  let activeSearchController = null;
+
   // Fetch suggestions from /api/suggest
   async function fetchSuggestions(prefix) {
+    if (activeSuggestController) {
+      activeSuggestController.abort();
+    }
+    activeSuggestController = new AbortController();
+
     try {
       const isFuzzy = currentMode === 'fuzzy';
-      const res = await fetch(getApiUrl(`/api/suggest?q=${encodeURIComponent(prefix)}&fuzzy=${isFuzzy}`));
+      const res = await fetch(getApiUrl(`/api/suggest?q=${encodeURIComponent(prefix)}&fuzzy=${isFuzzy}`), {
+        signal: activeSuggestController.signal
+      });
       if (!res.ok) throw new Error('API offline');
       const data = await res.json();
       renderSuggestions(data.suggestions || []);
     } catch (err) {
+      if (err.name === 'AbortError') return;
       renderOfflineSuggestions(prefix);
     }
   }
@@ -288,12 +299,20 @@
   async function executeSearch(query) {
     if (!query) return;
 
+    if (activeSearchController) {
+      activeSearchController.abort();
+    }
+    activeSearchController = new AbortController();
+
     try {
-      const res = await fetch(getApiUrl(`/api/search?q=${encodeURIComponent(query)}&mode=${currentMode}&limit=15`));
+      const res = await fetch(getApiUrl(`/api/search?q=${encodeURIComponent(query)}&mode=${currentMode}&limit=15`), {
+        signal: activeSearchController.signal
+      });
       if (!res.ok) throw new Error('API offline');
       const data = await res.json();
       renderResults(data);
     } catch (err) {
+      if (err.name === 'AbortError') return;
       renderOfflineResults(query);
     }
   }
@@ -377,9 +396,9 @@
         break;
       }
     }
-    let snippet = text.substr(bestStart, 260);
+    let snippet = escapeHtml(text.substr(bestStart, 260));
     for (const q of qterms) {
-      const reg = new RegExp(`(${escapeRegex(q)})`, 'gi');
+      const reg = new RegExp(`(${escapeRegex(escapeHtml(q))})`, 'gi');
       snippet = snippet.replace(reg, '<em>$1</em>');
     }
     return (bestStart > 0 ? '...' : '') + snippet + '...';

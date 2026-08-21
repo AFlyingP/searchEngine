@@ -24,7 +24,7 @@ uint32_t compute_crc32(std::span<const uint8_t> data) {
     return ~crc;
 }
 
-// Lightweight hand-written JSON string unescaper
+// Lightweight JSON string unescaper with \uXXXX support
 std::string parse_json_string(std::string_view raw) {
     std::string out;
     out.reserve(raw.size());
@@ -37,6 +37,15 @@ std::string parse_json_string(std::string_view raw) {
             } else if (next == '\\') {
                 out.push_back('\\');
                 i++;
+            } else if (next == '/') {
+                out.push_back('/');
+                i++;
+            } else if (next == 'b') {
+                out.push_back('\b');
+                i++;
+            } else if (next == 'f') {
+                out.push_back('\f');
+                i++;
             } else if (next == 'n') {
                 out.push_back('\n');
                 i++;
@@ -46,6 +55,34 @@ std::string parse_json_string(std::string_view raw) {
             } else if (next == 'r') {
                 out.push_back('\r');
                 i++;
+            } else if (next == 'u' && i + 5 < raw.size()) {
+                // Parse 4 hex digits
+                uint32_t cp = 0;
+                bool ok = true;
+                for (size_t h = 0; h < 4; ++h) {
+                    char c = raw[i + 2 + h];
+                    cp <<= 4;
+                    if (c >= '0' && c <= '9') cp |= static_cast<uint32_t>(c - '0');
+                    else if (c >= 'a' && c <= 'f') cp |= static_cast<uint32_t>(c - 'a' + 10);
+                    else if (c >= 'A' && c <= 'F') cp |= static_cast<uint32_t>(c - 'A' + 10);
+                    else { ok = false; break; }
+                }
+                if (ok) {
+                    // Encode as UTF-8
+                    if (cp <= 0x7F) {
+                        out.push_back(static_cast<char>(cp));
+                    } else if (cp <= 0x7FF) {
+                        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+                        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+                    } else {
+                        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+                        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+                        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+                    }
+                    i += 5;
+                } else {
+                    out.push_back(raw[i]);
+                }
             } else {
                 out.push_back(next);
                 i++;
@@ -78,8 +115,17 @@ bool extract_jsonl_fields(std::string_view line, uint32_t& doc_id, std::string& 
             // Quoted string
             size_t curr = val_start + 1;
             while (curr < line.size()) {
-                if (line[curr] == '"' && line[curr - 1] != '\\') {
-                    break;
+                if (line[curr] == '"') {
+                    // Count preceding backslashes
+                    size_t bs = 0;
+                    size_t bpos = curr;
+                    while (bpos > val_start + 1 && line[bpos - 1] == '\\') {
+                        bs++;
+                        bpos--;
+                    }
+                    if (bs % 2 == 0) {
+                        break;
+                    }
                 }
                 curr++;
             }
@@ -219,24 +265,31 @@ void IndexBuilder::write_index(const std::filesystem::path& output_idx_path) {
         const uint64_t post_offset = postings_buf.size();
         const uint32_t doc_freq = static_cast<uint32_t>(postings.size());
 
-        // Calculate max BM25 score for this term across its postings
+        // Calculate max BM25 scores per 128-postings block and overall
         const double idf = BM25Scorer::compute_idf(doc_freq, num_docs);
-        float max_term_score = 0.0f;
-        for (const auto& post : postings) {
-            const uint32_t doc_len = (post.doc_id < doc_metadata_.size())
-                                         ? doc_metadata_[post.doc_id].token_count
-                                         : static_cast<uint32_t>(avg_doc_len);
-            const float score = BM25Scorer::score_tf(post.term_freq, doc_len, avg_doc_len, idf);
-            if (score > max_term_score) {
-                max_term_score = score;
+        std::vector<float> block_max_scores;
+        float global_max_score = 0.0f;
+
+        for (size_t b = 0; b < postings.size(); b += 128) {
+            float b_max = 0.0f;
+            const size_t end_b = std::min(b + 128, postings.size());
+            for (size_t i = b; i < end_b; ++i) {
+                const auto& post = postings[i];
+                const uint32_t doc_len = (post.doc_id < doc_metadata_.size())
+                                             ? doc_metadata_[post.doc_id].token_count
+                                             : static_cast<uint32_t>(avg_doc_len);
+                const float score = BM25Scorer::score_tf(post.term_freq, doc_len, avg_doc_len, idf);
+                if (score > b_max) b_max = score;
             }
+            block_max_scores.push_back(b_max);
+            if (b_max > global_max_score) global_max_score = b_max;
         }
 
         PostingListWriter writer;
         for (const auto& post : postings) {
             writer.add_posting(post.doc_id, post.term_freq, post.positions);
         }
-        writer.finish(postings_buf, positions_buf, max_term_score);
+        writer.finish(postings_buf, positions_buf, block_max_scores);
 
         const uint32_t post_bytes = static_cast<uint32_t>(postings_buf.size() - post_offset);
 
@@ -244,7 +297,7 @@ void IndexBuilder::write_index(const std::filesystem::path& output_idx_path) {
                             .doc_freq = doc_freq,
                             .postings_offset = post_offset,
                             .postings_bytes = post_bytes,
-                            .max_term_score = max_term_score};
+                            .max_term_score = global_max_score};
         trie.insert(term, payload);
     }
 
@@ -256,7 +309,11 @@ void IndexBuilder::write_index(const std::filesystem::path& output_idx_path) {
 
     // 3. Prepare Stats Section
     Bm25Stats stats{
-        .total_docs = num_docs, .total_tokens = total_tokens_, .avg_doc_len = avg_doc_len};
+        .total_docs = num_docs,
+        .total_tokens = total_tokens_,
+        .avg_doc_len = avg_doc_len,
+        .k1 = 0.9f,
+        .b = 0.4f};
     std::vector<uint8_t> stats_buf(sizeof(stats));
     std::memcpy(stats_buf.data(), &stats, sizeof(stats));
 
@@ -342,6 +399,11 @@ void IndexBuilder::write_index(const std::filesystem::path& output_idx_path) {
             out.write(&zero, 1);
             written++;
         }
+    }
+
+    out.flush();
+    if (!out) {
+        throw std::runtime_error("Disk write failure while writing index to: " + output_idx_path.string());
     }
 }
 

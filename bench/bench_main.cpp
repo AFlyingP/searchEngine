@@ -126,6 +126,8 @@ static void BM_FMIndex_Locate(benchmark::State& state) {
     }
     state.SetItemsProcessed(state.iterations());
 }
+BENCHMARK(BM_FMIndex_Locate);
+
 // 6. Posting Decode Benchmark (Scalar vs SIMD, 1M postings)
 static void BM_Posting_Decode_Scalar(benchmark::State& state) {
     const size_t num_blocks = 8000;  // ~1,024,000 postings
@@ -175,6 +177,7 @@ static void BM_Posting_Decode_SIMD(benchmark::State& state) {
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) *
                             static_cast<int64_t>(num_blocks * 128));
 }
+BENCHMARK(BM_Posting_Decode_SIMD);
 #include "automata/levenshtein.hpp"
 #include "automata/regex.hpp"
 #include "invidx/radix_trie.hpp"

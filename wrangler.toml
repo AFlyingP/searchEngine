@@ -1,5 +1,5 @@
-name = "needlepig"
-compatibility_date = "2026-08-19"
+name = "needlefish"
+compatibility_date = "2024-01-01"
 
 [assets]
 directory = "./web"

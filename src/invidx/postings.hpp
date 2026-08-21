@@ -34,14 +34,14 @@ class PostingListWriter {
 
     void add_posting(uint32_t doc_id, uint32_t term_freq, std::span<const uint32_t> positions);
     void finish(std::vector<uint8_t>& postings_out, std::vector<uint8_t>& positions_out,
-                float max_term_score = 0.0f);
+                std::span<const float> block_max_scores);
 
     [[nodiscard]] size_t doc_freq() const noexcept { return total_docs_; }
     [[nodiscard]] uint32_t max_doc_id() const noexcept { return max_doc_id_; }
 
   private:
     void flush_batch(size_t start_idx, size_t count, std::vector<uint8_t>& postings_out,
-                     std::vector<uint8_t>& positions_out, float max_term_score);
+                     std::vector<uint8_t>& positions_out, float block_max_score);
 
     size_t total_docs_{0};
     uint32_t max_doc_id_{0};

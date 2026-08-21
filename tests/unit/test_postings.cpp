@@ -80,7 +80,8 @@ TEST(PostingsTest, MultiBlockWriterReader) {
 
     std::vector<uint8_t> postings_buf;
     std::vector<uint8_t> positions_buf;
-    writer.finish(postings_buf, positions_buf, 4.5f);
+    float max_scores[] = {4.5f, 4.5f, 4.5f, 4.5f};
+    writer.finish(postings_buf, positions_buf, max_scores);
 
     PostingListReader reader(postings_buf, positions_buf, num_docs);
 

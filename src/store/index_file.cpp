@@ -1,6 +1,8 @@
 #include "store/index_file.hpp"
 
+#include <algorithm>
 #include <cstring>
+#include <fstream>
 #include <sstream>
 #include <stdexcept>
 
@@ -49,29 +51,39 @@ void IndexView::parse_sections(std::span<const uint8_t> data) {
     if (header.version != INDEX_VERSION) {
         throw std::runtime_error("Unsupported index version: " + std::to_string(header.version));
     }
+    if (header.file_size != 0 && header.file_size != data.size()) {
+        throw std::runtime_error("Corrupted index: header file_size mismatch");
+    }
 
     const size_t section_table_size = header.num_sections * sizeof(SectionEntry);
     if (header.num_sections > 1000 || section_table_size > data.size() - sizeof(IndexHeader)) {
         throw std::runtime_error("Corrupted index: invalid section table size");
     }
 
+    // Precompute whole-index metadata checksum
+    index_checksum_ = compute_crc32(data.subspan(0, sizeof(IndexHeader) + section_table_size));
+
     std::vector<SectionEntry> sections(header.num_sections);
     std::memcpy(sections.data(), data.data() + sizeof(IndexHeader), section_table_size);
 
+    std::vector<uint32_t> seen_sections;
     for (const auto& sec : sections) {
+        if (std::find(seen_sections.begin(), seen_sections.end(), sec.section_id) != seen_sections.end()) {
+            throw std::runtime_error("Corrupted index: duplicate section ID " + std::to_string(sec.section_id));
+        }
+        seen_sections.push_back(sec.section_id);
+
         if (sec.offset > data.size() || sec.length > data.size() - sec.offset) {
             throw std::runtime_error("Corrupted index: section bounds out of range or integer overflow");
         }
 
         std::span<const uint8_t> sec_data(data.data() + sec.offset, sec.length);
 
-        // Validate section checksum if present
-        if (sec.checksum != 0) {
-            const uint32_t actual_crc = compute_crc32(sec_data);
-            if (actual_crc != sec.checksum) {
-                throw std::runtime_error("Corrupted index: checksum mismatch in section " +
-                                         std::to_string(sec.section_id));
-            }
+        // Validate section checksum
+        const uint32_t actual_crc = compute_crc32(sec_data);
+        if (sec.checksum != 0 && actual_crc != sec.checksum) {
+            throw std::runtime_error("Corrupted index: checksum mismatch in section " +
+                                     std::to_string(sec.section_id));
         }
 
         switch (static_cast<SectionId>(sec.section_id)) {
@@ -114,6 +126,13 @@ void IndexView::parse_sections(std::span<const uint8_t> data) {
                 break;
         }
     }
+}
+
+uint32_t IndexView::external_id(uint32_t internal_id) const noexcept {
+    if (internal_id >= doc_records_.size()) {
+        return internal_id;
+    }
+    return doc_records_[internal_id].doc_id;
 }
 
 const DocMetadataRecord& IndexView::doc_metadata(uint32_t doc_id) const {

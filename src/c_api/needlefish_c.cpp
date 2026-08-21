@@ -44,17 +44,28 @@ needlefish_index_t* needlefish_open(const char* index_path) {
 }
 
 void needlefish_close(needlefish_index_t* handle) {
-    delete handle;
+    try {
+        delete handle;
+    } catch (...) {
+    }
 }
 
 uint32_t needlefish_total_docs(const needlefish_index_t* handle) {
     if (!handle) return 0;
-    return handle->index.stats().total_docs;
+    try {
+        return handle->index.stats().total_docs;
+    } catch (...) {
+        return 0;
+    }
 }
 
 uint64_t needlefish_total_tokens(const needlefish_index_t* handle) {
     if (!handle) return 0;
-    return handle->index.stats().total_tokens;
+    try {
+        return handle->index.stats().total_tokens;
+    } catch (...) {
+        return 0;
+    }
 }
 
 needlefish_search_result_t* needlefish_search(needlefish_index_t* handle,
@@ -89,8 +100,8 @@ needlefish_search_result_t* needlefish_search(needlefish_index_t* handle,
             res->snippets.push_back(snippet);
 
             needlefish_hit_t c_hit;
-            c_hit.doc_id = hit.doc_id;
-            c_hit.score = hit.score;
+            c_hit.doc_id = handle->index.external_id(hit.doc_id);
+            c_hit.score = (std::isnan(hit.score) || std::isinf(hit.score)) ? 0.0f : hit.score;
             c_hit.title = res->titles.back().c_str();
             c_hit.snippet = res->snippets.back().c_str();
 
@@ -105,7 +116,10 @@ needlefish_search_result_t* needlefish_search(needlefish_index_t* handle,
 }
 
 void needlefish_free_search_result(needlefish_search_result_t* result) {
-    delete static_cast<InternalSearchResult*>(result);
+    try {
+        delete static_cast<InternalSearchResult*>(result);
+    } catch (...) {
+    }
 }
 
 needlefish_suggest_result_t* needlefish_suggest(needlefish_index_t* handle,
@@ -135,7 +149,10 @@ needlefish_suggest_result_t* needlefish_suggest(needlefish_index_t* handle,
 }
 
 void needlefish_free_suggest_result(needlefish_suggest_result_t* result) {
-    delete static_cast<InternalSuggestResult*>(result);
+    try {
+        delete static_cast<InternalSuggestResult*>(result);
+    } catch (...) {
+    }
 }
 
 }

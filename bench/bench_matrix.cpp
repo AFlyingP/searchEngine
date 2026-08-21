@@ -70,7 +70,7 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "========================================================================\n";
-    std::cout << " Needlefish Search Engine - Phase 6 Comprehensive Benchmark Matrix\n";
+    std::cout << " Needlefish Search Engine - Comprehensive Benchmark Matrix\n";
     std::cout << "========================================================================\n\n";
 
     // 1. Measure Index Load Time
@@ -222,12 +222,12 @@ int main(int argc, char** argv) {
     std::cout << "[5/5] Generating bench/report.md...\n";
     std::ofstream rpt("bench/report.md");
     rpt << "# Needlefish Search Engine - Reproducible Benchmark Report\n\n";
-    rpt << "- **Corpus**: Simple English Wikipedia (271,979 documents, 34.97M tokens)\n";
-    rpt << "- **Index File Size**: " << (static_cast<double>(index.file_size()) / (1024.0 * 1024.0)) << " MB (`wikipedia.idx`)\n";
+    rpt << "- **Corpus**: " << index.stats().total_docs << " documents, " << index.stats().total_tokens << " tokens\n";
+    rpt << "- **Index File Size**: " << (static_cast<double>(index.file_size()) / (1024.0 * 1024.0)) << " MB (`" << index_path << "`)\n";
     rpt << "- **Zero-Copy Load Time**: " << load_time_ms << " ms\n";
-    rpt << "- **Compiler**: GCC / Clang C++20 (-O3)\n\n";
+    rpt << "- **Compiler**: C++20 (-O3)\n\n";
 
-    rpt << "## 1. Query Latency Matrix (1,000 Sample Trials)\n\n";
+    rpt << "## 1. Query Latency Matrix (" << NUM_TRIALS << " Sample Trials per Query Class)\n\n";
     rpt << "| Query Class | p50 Latency | p95 Latency | p99 Latency | Mean Latency | Throughput (QPS) |\n";
     rpt << "| :--- | :--- | :--- | :--- | :--- | :--- |\n";
     for (const auto& [name, s] : benchmark_results) {
@@ -252,10 +252,10 @@ int main(int argc, char** argv) {
     rpt << "| **SIMD Bit-Packing Unpack** | **" << simd_m_per_sec << " Million / sec** | **" << (simd_m_per_sec / scalar_m_per_sec) << "× faster** |\n";
     rpt << "| Scalar Fallback Unpack | " << scalar_m_per_sec << " Million / sec | 1.00× (Baseline) |\n\n";
 
-    rpt << "### C. Typo-Tolerant Search: Schulz-Mihov DFA ∩ Radix Trie vs Brute-Force DP\n\n";
+    rpt << "### C. Typo-Tolerant Search: Levenshtein DP-Row Automaton ∩ Radix Trie vs Brute-Force DP\n\n";
     rpt << "| Approach | Latency (k=1) | Latency (k=2) | Lexicon Scalability |\n";
     rpt << "| :--- | :--- | :--- | :--- |\n";
-    rpt << "| **Schulz-Mihov DFA ∩ Flattened Trie** | **< 150 µs** | **< 850 µs** | $O(|q|)$ parametric state transitions |\n";
+    rpt << "| **Levenshtein Automaton ∩ Flattened Trie** | **< 150 µs** | **< 850 µs** | $O(|q|)$ state transitions |\n";
     rpt << "| Exhaustive DP Matrix against Lexicon | ~45,000 µs | ~65,000 µs | $O(N \\cdot |q| \\cdot |w|)$ linear scan |\n\n";
 
     rpt << "## 3. Comparative Architecture Overview\n\n";
@@ -263,7 +263,7 @@ int main(int argc, char** argv) {
     rpt << "| :--- | :--- | :--- | :--- |\n";
     rpt << "| **Language / Standard** | C++20 (Zero Dependencies) | Rust | Rust |\n";
     rpt << "| **Substring Search** | Hand-crafted FM-Index (SA-IS + Wavelet) | Trigram Inverted Index | Regex / Trigram |\n";
-    rpt << "| **Fuzzy Matching** | Schulz-Mihov Universal Automata ∩ Trie | FST Levenshtein Automata | Levenshtein DFA |\n";
+    rpt << "| **Fuzzy Matching** | Levenshtein DP-Row Automaton ∩ Trie | FST Levenshtein Automata | Levenshtein DFA |\n";
     rpt << "| **Index Format** | Single-file zero-copy memory mapped | Segment directory | LMDB KV Store |\n";
     rpt << "| **Posting Compression** | Bit-width PFOR + SIMD | SIMD-BP128 | Bitmap Roaring |\n";
     rpt << "| **Disjunctive Ranking** | Block-Max WAND | Block-Max WAND | Bucket Ranking |\n";
@@ -271,7 +271,7 @@ int main(int argc, char** argv) {
 
     std::cout << "  Created bench/report.md successfully.\n\n";
     std::cout << "========================================================================\n";
-    std::cout << " Phase 6 Benchmark Execution Complete.\n";
+    std::cout << " Benchmark Execution Complete.\n";
     std::cout << "========================================================================\n";
     return 0;
 }

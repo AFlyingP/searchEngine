@@ -1,0 +1,62 @@
+.TH NEEDLEFISH 1 "August 2026" "Needlefish 1.0.0" "User Commands"
+.SH NAME
+needlefish \- high-performance embedded full-text & regex search engine
+.SH SYNOPSIS
+.B needlefish
+\fIcommand\fR [\fIoptions\fR]
+.SH DESCRIPTION
+\fBneedlefish\fR is an ultra-fast, zero-copy, memory-mapped full-text search engine implemented in C++20. It combines an inverted index with Block-Max WAND pruning, BitPacking, SIMD acceleration, Burrows-Wheeler Transform FM-Index substring indexing, and Levenshtein automata for fuzzy query evaluation.
+.SH COMMANDS
+.TP
+.B index
+Build an index from a JSONL file.
+.TP
+.B search
+Execute BM25, phrase, regex, or fuzzy queries against an existing index.
+.TP
+.B suggest
+Generate prefix and fuzzy autocomplete term suggestions from the index trie.
+.TP
+.B stats
+Display metadata and section breakdown for an index file.
+.TP
+.B serve
+Start the HTTP search API daemon and embedded web search interface.
+.SH OPTIONS
+.TP
+.BR \-i ", " \-\-input " \fIfile.jsonl\fR"
+Path to input JSONL file for indexing.
+.TP
+.BR \-o ", " \-\-output " \fIindex.idx\fR"
+Path to output unified index file.
+.TP
+.BR \-\-index " \fIindex.idx\fR"
+Path to existing index file to open.
+.TP
+.BR \-q ", " \-\-query " \fIstring\fR"
+Search query string or autocomplete prefix.
+.TP
+.BR \-k " \fInumber\fR"
+Maximum number of top-ranked results to return (default: 10).
+.TP
+.BR \-f ", " \-\-fuzzy " [\fIdistance\fR]"
+Enable Levenshtein fuzzy matching within edit distance (default: 2, max: 2).
+.TP
+.BR \-s ", " \-\-enable\-fm ", " \-\-enable\-substring
+Enable substring FM-index indexing during build or substring matching during search.
+.TP
+.BR \-r ", " \-\-regex
+Force evaluation of query as a regular expression.
+.TP
+.BR \-p ", " \-\-port " \fIport\fR"
+Port for HTTP daemon (default: 8080).
+.TP
+.BR \-w ", " \-\-web\-dir " \fIdirectory\fR"
+Path to static web assets directory (default: web).
+.SH SEE ALSO
+.BR grep (1),
+.BR sed (1)
+.SH AUTHORS
+Needlefish Search Engine Project Authors.
+.SH LICENSE
+MIT License.
