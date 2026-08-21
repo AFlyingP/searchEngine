@@ -270,6 +270,9 @@ void Regex::add_transition(int from, size_t symbol, int to) {
 
 void Regex::compile() {
     nfa_states_.clear();
+    dfa_states_.clear();
+    nfa_set_to_dfa_.clear();
+
     auto frag = compile_node(ast_);
     nfa_start_ = frag.start_state;
     nfa_match_ = new_nfa_state();
@@ -279,11 +282,66 @@ void Regex::compile() {
         add_transition(out, NFAState::EPSILON, nfa_match_);
     }
 
-    // Initialize DFA with initial epsilon closure
+    // Build DFA states using an explicit worklist (BFS queue)
     std::vector<int> initial_nfa = {nfa_start_};
     std::vector<int> initial_closure;
     compute_epsilon_closure(initial_nfa, initial_closure);
-    get_or_create_dfa_state(initial_closure);
+
+    std::vector<std::vector<int>> dfa_to_nfa;
+
+    auto get_or_add_state = [&](const std::vector<int>& nfa_set) -> int {
+        if (nfa_set.empty()) return -1;
+        std::stringstream ss;
+        for (int s : nfa_set) ss << s << ",";
+        std::string key = ss.str();
+        auto it = nfa_set_to_dfa_.find(key);
+        if (it != nfa_set_to_dfa_.end()) return it->second;
+
+        if (dfa_states_.size() >= 2048) {
+            throw std::runtime_error("DFA state explosion limit exceeded (max 2048 states)");
+        }
+        int id = static_cast<int>(dfa_states_.size());
+        DFAState state{.id = id, .is_match = false, .transitions = {}};
+        state.transitions.fill(-1);
+        for (int s : nfa_set) {
+            if (nfa_states_[static_cast<size_t>(s)].is_match) {
+                state.is_match = true;
+                break;
+            }
+        }
+        dfa_states_.push_back(state);
+        nfa_set_to_dfa_[key] = id;
+        dfa_to_nfa.push_back(nfa_set);
+        return id;
+    };
+
+    get_or_add_state(initial_closure);
+
+    size_t processed = 0;
+    while (processed < dfa_to_nfa.size()) {
+        int curr_dfa_id = static_cast<int>(processed);
+        const auto curr_nfa = dfa_to_nfa[processed];
+        processed++;
+
+        for (size_t c = 0; c < 256; ++c) {
+            std::vector<int> target_nfa;
+            for (int s : curr_nfa) {
+                for (const auto& [sym, next] : nfa_states_[static_cast<size_t>(s)].transitions) {
+                    if (sym == c) {
+                        target_nfa.push_back(next);
+                    }
+                }
+            }
+            if (!target_nfa.empty()) {
+                std::vector<int> target_closure;
+                compute_epsilon_closure(target_nfa, target_closure);
+                int target_dfa = get_or_add_state(target_closure);
+                dfa_states_[static_cast<size_t>(curr_dfa_id)].transitions[c] = target_dfa;
+            } else {
+                dfa_states_[static_cast<size_t>(curr_dfa_id)].transitions[c] = -1;
+            }
+        }
+    }
 }
 
 Regex::NFAFragment Regex::compile_node(const std::shared_ptr<RegexASTNode>& node) {
@@ -426,61 +484,6 @@ void Regex::compute_epsilon_closure(const std::vector<int>& states,
     closure.erase(std::unique(closure.begin(), closure.end()), closure.end());
 }
 
-int Regex::get_or_create_dfa_state(const std::vector<int>& nfa_set) {
-    if (nfa_set.empty()) {
-        return -1;
-    }
-
-    std::stringstream key_ss;
-    for (int s : nfa_set) {
-        key_ss << s << ",";
-    }
-    std::string key = key_ss.str();
-
-    auto it = nfa_set_to_dfa_.find(key);
-    if (it != nfa_set_to_dfa_.end()) {
-        return it->second;
-    }
-
-    int dfa_id = static_cast<int>(dfa_states_.size());
-    if (dfa_states_.size() >= 2048) {
-        throw std::runtime_error("DFA state explosion limit exceeded (max 2048 states)");
-    }
-    DFAState dfa_state{.id = dfa_id, .is_match = false, .transitions = {}};
-    dfa_state.transitions.fill(-2);  // -2 indicates uncomputed transition
-
-    for (int s : nfa_set) {
-        if (nfa_states_[static_cast<size_t>(s)].is_match) {
-            dfa_state.is_match = true;
-            break;
-        }
-    }
-
-    dfa_states_.push_back(dfa_state);
-    nfa_set_to_dfa_[key] = dfa_id;
-
-    // Lazily evaluate transitions on demand
-    for (size_t c = 0; c < 256; ++c) {
-        std::vector<int> target_nfa;
-        for (int s : nfa_set) {
-            for (const auto& [sym, next] : nfa_states_[static_cast<size_t>(s)].transitions) {
-                if (sym == c) {
-                    target_nfa.push_back(next);
-                }
-            }
-        }
-        if (!target_nfa.empty()) {
-            std::vector<int> target_closure;
-            compute_epsilon_closure(target_nfa, target_closure);
-            dfa_states_[static_cast<size_t>(dfa_id)].transitions[c] =
-                get_or_create_dfa_state(target_closure);
-        } else {
-            dfa_states_[static_cast<size_t>(dfa_id)].transitions[c] = -1;  // Dead state
-        }
-    }
-
-    return dfa_id;
-}
 
 bool Regex::is_match(std::string_view text) const {
     int curr_dfa = 0;

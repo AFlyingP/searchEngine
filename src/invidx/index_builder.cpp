@@ -24,7 +24,7 @@ uint32_t compute_crc32(std::span<const uint8_t> data) {
     return ~crc;
 }
 
-// Lightweight JSON string unescaper with \uXXXX support
+// Lightweight JSON string unescaper with \uXXXX support and UTF-16 surrogate pairs
 std::string parse_json_string(std::string_view raw) {
     std::string out;
     out.reserve(raw.size());
@@ -56,20 +56,42 @@ std::string parse_json_string(std::string_view raw) {
                 out.push_back('\r');
                 i++;
             } else if (next == 'u' && i + 5 < raw.size()) {
-                // Parse 4 hex digits
-                uint32_t cp = 0;
-                bool ok = true;
-                for (size_t h = 0; h < 4; ++h) {
-                    char c = raw[i + 2 + h];
-                    cp <<= 4;
-                    if (c >= '0' && c <= '9') cp |= static_cast<uint32_t>(c - '0');
-                    else if (c >= 'a' && c <= 'f') cp |= static_cast<uint32_t>(c - 'a' + 10);
-                    else if (c >= 'A' && c <= 'F') cp |= static_cast<uint32_t>(c - 'A' + 10);
-                    else { ok = false; break; }
-                }
+                auto parse_hex4 = [&](size_t offset) -> std::pair<uint32_t, bool> {
+                    uint32_t val = 0;
+                    for (size_t h = 0; h < 4; ++h) {
+                        char c = raw[offset + h];
+                        val <<= 4;
+                        if (c >= '0' && c <= '9') val |= static_cast<uint32_t>(c - '0');
+                        else if (c >= 'a' && c <= 'f') val |= static_cast<uint32_t>(c - 'a' + 10);
+                        else if (c >= 'A' && c <= 'F') val |= static_cast<uint32_t>(c - 'A' + 10);
+                        else return {0, false};
+                    }
+                    return {val, true};
+                };
+
+                auto [cp, ok] = parse_hex4(i + 2);
                 if (ok) {
-                    // Encode as UTF-8
-                    if (cp <= 0x7F) {
+                    i += 5;  // Consumed \uXXXX
+                    if (cp >= 0xD800 && cp <= 0xDBFF) {
+                        // High surrogate: look for matching low surrogate \uXXXX
+                        if (i + 6 < raw.size() && raw[i + 1] == '\\' && raw[i + 2] == 'u') {
+                            auto [low_cp, low_ok] = parse_hex4(i + 3);
+                            if (low_ok && low_cp >= 0xDC00 && low_cp <= 0xDFFF) {
+                                i += 6;
+                                uint32_t full_cp = 0x10000 + ((cp - 0xD800) << 10) + (low_cp - 0xDC00);
+                                out.push_back(static_cast<char>(0xF0 | (full_cp >> 18)));
+                                out.push_back(static_cast<char>(0x80 | ((full_cp >> 12) & 0x3F)));
+                                out.push_back(static_cast<char>(0x80 | ((full_cp >> 6) & 0x3F)));
+                                out.push_back(static_cast<char>(0x80 | (full_cp & 0x3F)));
+                                continue;
+                            }
+                        }
+                        // Lone high surrogate -> emit U+FFFD
+                        out.append("\xEF\xBF\xBD");
+                    } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+                        // Lone low surrogate -> emit U+FFFD
+                        out.append("\xEF\xBF\xBD");
+                    } else if (cp <= 0x7F) {
                         out.push_back(static_cast<char>(cp));
                     } else if (cp <= 0x7FF) {
                         out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
@@ -79,7 +101,6 @@ std::string parse_json_string(std::string_view raw) {
                         out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
                         out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
                     }
-                    i += 5;
                 } else {
                     out.push_back(raw[i]);
                 }
@@ -98,59 +119,58 @@ std::string parse_json_string(std::string_view raw) {
 bool extract_jsonl_fields(std::string_view line, uint32_t& doc_id, std::string& title,
                           std::string& text) {
     auto find_field = [&](std::string_view key) -> std::string_view {
-        const size_t kpos = line.find(key);
-        if (kpos == std::string_view::npos) {
-            return "";
-        }
-        size_t colon = line.find(':', kpos + key.size());
-        if (colon == std::string_view::npos) {
-            return "";
-        }
-        size_t val_start = line.find_first_not_of(" \t\r\n", colon + 1);
-        if (val_start == std::string_view::npos) {
-            return "";
-        }
+        std::string pattern = "\"" + std::string(key) + "\"";
+        size_t search_pos = 0;
+        while (search_pos < line.size()) {
+            size_t kpos = line.find(pattern, search_pos);
+            if (kpos == std::string_view::npos) return "";
 
-        if (line[val_start] == '"') {
-            // Quoted string
-            size_t curr = val_start + 1;
-            while (curr < line.size()) {
-                if (line[curr] == '"') {
-                    // Count preceding backslashes
-                    size_t bs = 0;
-                    size_t bpos = curr;
-                    while (bpos > val_start + 1 && line[bpos - 1] == '\\') {
-                        bs++;
-                        bpos--;
-                    }
-                    if (bs % 2 == 0) {
-                        break;
+            bool valid_prefix = (kpos == 0);
+            if (kpos > 0) {
+                size_t prev = line.find_last_not_of(" \t\r\n", kpos - 1);
+                if (prev == std::string_view::npos || line[prev] == '{' || line[prev] == ',') {
+                    valid_prefix = true;
+                }
+            }
+            if (valid_prefix) {
+                size_t colon = line.find(':', kpos + pattern.size());
+                if (colon != std::string_view::npos) {
+                    size_t val_start = line.find_first_not_of(" \t\r\n", colon + 1);
+                    if (val_start != std::string_view::npos) {
+                        if (line[val_start] == '"') {
+                            size_t curr = val_start + 1;
+                            while (curr < line.size()) {
+                                if (line[curr] == '"') {
+                                    size_t bs = 0;
+                                    size_t bpos = curr;
+                                    while (bpos > val_start + 1 && line[bpos - 1] == '\\') {
+                                        bs++;
+                                        bpos--;
+                                    }
+                                    if (bs % 2 == 0) {
+                                        return line.substr(val_start + 1, curr - (val_start + 1));
+                                    }
+                                }
+                                curr++;
+                            }
+                            return "";
+                        } else {
+                            size_t val_end = line.find_first_of(",}\r\n ", val_start);
+                            if (val_end == std::string_view::npos)
+                                val_end = line.size();
+                            return line.substr(val_start, val_end - val_start);
+                        }
                     }
                 }
-                curr++;
             }
-            return line.substr(val_start + 1, curr - (val_start + 1));
-        } else {
-            // Number or bare token
-            size_t val_end = line.find_first_of(",}\r\n ", val_start);
-            if (val_end == std::string_view::npos)
-                val_end = line.size();
-            return line.substr(val_start, val_end - val_start);
+            search_pos = kpos + pattern.size();
         }
+        return "";
     };
 
-    auto id_str = find_field("\"id\"");
-    if (id_str.empty()) {
-        id_str = find_field("id");
-    }
-    auto title_str = find_field("\"title\"");
-    if (title_str.empty()) {
-        title_str = find_field("title");
-    }
-    auto text_str = find_field("\"text\"");
-    if (text_str.empty()) {
-        text_str = find_field("text");
-    }
+    auto id_str = find_field("id");
+    auto title_str = find_field("title");
+    auto text_str = find_field("text");
 
     if (id_str.empty() && text_str.empty()) {
         return false;
@@ -168,8 +188,6 @@ bool extract_jsonl_fields(std::string_view line, uint32_t& doc_id, std::string& 
 }
 
 }  // namespace
-
-IndexBuilder::IndexBuilder(size_t memory_budget_bytes) : memory_budget_(memory_budget_bytes) {}
 
 void IndexBuilder::add_document(uint32_t doc_id, std::string_view title, std::string_view text) {
     accumulate_document(doc_id, title, text);
@@ -213,10 +231,6 @@ void IndexBuilder::accumulate_document(uint32_t doc_id, std::string_view title,
                                     .term_freq = static_cast<uint32_t>(pos_vec.size()),
                                     .positions = std::move(pos_vec)});
     }
-
-    estimated_memory_usage_ = stored_fields_.size() +
-                              doc_metadata_.size() * sizeof(DocMetadataRecord) +
-                              term_postings_.size() * 64;
 }
 
 size_t IndexBuilder::index_jsonl_file(const std::filesystem::path& jsonl_path) {

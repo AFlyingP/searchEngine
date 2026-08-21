@@ -1,14 +1,28 @@
 #include "rank/query_eval.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <iostream>
 #include <queue>
 #include <sstream>
+#include <stdexcept>
+#include <unordered_set>
 
 namespace needlefish {
 
 QueryEvaluator::QueryEvaluator(const IndexView& index, BM25Scorer scorer)
-    : index_(index), scorer_(scorer) {}
+    : index_(index), scorer_(scorer) {
+    if (index_.total_docs() > 0) {
+        const auto& st = index_.stats();
+        if (st.k1 > 0.0f && std::abs(st.k1 - scorer_.k1()) > 1e-4f) {
+            throw std::invalid_argument("Scorer k1 mismatch with index stats");
+        }
+        if (st.b > 0.0f && std::abs(st.b - scorer_.b()) > 1e-4f) {
+            throw std::invalid_argument("Scorer b mismatch with index stats");
+        }
+    }
+}
 
 QueryResult QueryEvaluator::search_disjunction(std::span<const std::string> terms, size_t k,
                                                bool use_wand) const {
@@ -18,8 +32,17 @@ QueryResult QueryEvaluator::search_disjunction(std::span<const std::string> term
         return QueryResult{.hits = {}, .total_estimate = 0, .took_us = 0};
     }
 
+    // Deduplicate input terms
+    std::vector<std::string> unique_terms;
+    std::unordered_set<std::string> seen;
+    for (const auto& t : terms) {
+        if (seen.insert(t).second) {
+            unique_terms.push_back(t);
+        }
+    }
+
     std::vector<ScoredTermReader> readers;
-    for (const auto& raw_t : terms) {
+    for (const auto& raw_t : unique_terms) {
         auto payload = index_.term_dict().lookup(raw_t);
         if (!payload.valid()) {
             std::string term = analyzer_.normalize_term(raw_t);
@@ -61,8 +84,17 @@ QueryResult QueryEvaluator::search_conjunction(std::span<const std::string> term
         return QueryResult{.hits = {}, .total_estimate = 0, .took_us = 0};
     }
 
+    // Deduplicate input terms
+    std::vector<std::string> unique_terms;
+    std::unordered_set<std::string> seen;
+    for (const auto& t : terms) {
+        if (seen.insert(t).second) {
+            unique_terms.push_back(t);
+        }
+    }
+
     std::vector<ScoredTermReader> readers;
-    for (const auto& raw_t : terms) {
+    for (const auto& raw_t : unique_terms) {
         auto payload = index_.term_dict().lookup(raw_t);
         if (!payload.valid()) {
             std::string term = analyzer_.normalize_term(raw_t);
@@ -88,7 +120,11 @@ QueryResult QueryEvaluator::search_conjunction(std::span<const std::string> term
                   return a.reader.total_docs() < b.reader.total_docs();
               });
 
-    auto cmp = [](const SearchHit& a, const SearchHit& b) { return a.score > b.score; };
+    auto cmp = [](const SearchHit& a, const SearchHit& b) {
+        if (a.score != b.score)
+            return a.score > b.score;
+        return a.doc_id < b.doc_id; // larger doc_id popped first -> smaller doc_id kept
+    };
     std::priority_queue<SearchHit, std::vector<SearchHit>, decltype(cmp)> heap(cmp);
 
     const double avg_doc_len = index_.avg_doc_len();
@@ -136,7 +172,11 @@ QueryResult QueryEvaluator::search_conjunction(std::span<const std::string> term
         hits.push_back(heap.top());
         heap.pop();
     }
-    std::reverse(hits.begin(), hits.end());
+    std::sort(hits.begin(), hits.end(), [](const SearchHit& a, const SearchHit& b) {
+        if (a.score != b.score)
+            return a.score > b.score;
+        return a.doc_id < b.doc_id;
+    });
 
     const auto end_time = std::chrono::high_resolution_clock::now();
     const uint64_t took = static_cast<uint64_t>(
@@ -154,8 +194,11 @@ QueryResult QueryEvaluator::search_phrase(std::span<const std::string> terms, si
 
     std::vector<ScoredTermReader> readers;
     for (const auto& raw_t : terms) {
-        std::string term = analyzer_.normalize_term(raw_t);
-        const auto payload = index_.term_dict().lookup(term);
+        auto payload = index_.term_dict().lookup(raw_t);
+        if (!payload.valid()) {
+            std::string term = analyzer_.normalize_term(raw_t);
+            payload = index_.term_dict().lookup(term);
+        }
         if (!payload.valid()) {
             const auto end_time = std::chrono::high_resolution_clock::now();
             const uint64_t took = static_cast<uint64_t>(
@@ -252,7 +295,11 @@ QueryResult QueryEvaluator::search_phrase(std::span<const std::string> terms, si
         hits.push_back(heap.top());
         heap.pop();
     }
-    std::reverse(hits.begin(), hits.end());
+    std::sort(hits.begin(), hits.end(), [](const SearchHit& a, const SearchHit& b) {
+        if (a.score != b.score)
+            return a.score > b.score;
+        return a.doc_id < b.doc_id;
+    });
 
     const auto end_time = std::chrono::high_resolution_clock::now();
     const uint64_t took = static_cast<uint64_t>(
@@ -307,55 +354,99 @@ QueryResult QueryEvaluator::search(std::string_view query_str, size_t k, bool us
         return QueryResult{};
     }
 
-    QueryResult base_res;
-    if (has_or || use_wand) {
-        base_res = search_disjunction(positive_terms, k + negated_terms.size() * 5, use_wand);
-    } else {
-        base_res = search_conjunction(positive_terms, k + negated_terms.size() * 5);
-    }
-
-    if (negated_terms.empty() || base_res.hits.empty()) {
-        if (base_res.hits.size() > k) {
-            base_res.hits.resize(k);
-        }
-        return base_res;
-    }
-
-    // Filter out hits matching negated terms
-    std::vector<PostingListReader> neg_readers;
-    for (const auto& nt : negated_terms) {
-        const auto payload = index_.term_dict().lookup(nt);
-        if (payload.valid()) {
-            neg_readers.push_back(index_.get_posting_reader(payload));
-        }
-    }
-
-    if (neg_readers.empty()) {
-        if (base_res.hits.size() > k) {
-            base_res.hits.resize(k);
-        }
-        return base_res;
-    }
-
-    std::vector<SearchHit> filtered_hits;
-    for (const auto& hit : base_res.hits) {
-        bool matches_neg = false;
-        for (auto& nr : neg_readers) {
-            nr.advance(hit.doc_id);
-            if (nr.valid() && nr.doc_id() == hit.doc_id) {
-                matches_neg = true;
-                break;
+    // Deduplicate positive and negated terms
+    std::vector<std::string> unique_pos;
+    {
+        std::unordered_set<std::string> seen;
+        for (const auto& t : positive_terms) {
+            if (seen.insert(t).second) {
+                unique_pos.push_back(t);
             }
         }
-        if (!matches_neg) {
-            filtered_hits.push_back(hit);
-            if (filtered_hits.size() == k) break;
+    }
+    std::vector<std::string> unique_neg;
+    {
+        std::unordered_set<std::string> seen;
+        for (const auto& t : negated_terms) {
+            if (seen.insert(t).second) {
+                unique_neg.push_back(t);
+            }
         }
     }
 
-    base_res.hits = std::move(filtered_hits);
-    base_res.total_estimate = base_res.hits.size();
-    return base_res;
+    // Decode full doc ID lists for all negated terms once (stateless, sorted)
+    std::vector<std::vector<uint32_t>> neg_doc_lists;
+    for (const auto& nt : unique_neg) {
+        auto payload = index_.term_dict().lookup(nt);
+        if (!payload.valid()) {
+            std::string term = analyzer_.normalize_term(nt);
+            payload = index_.term_dict().lookup(term);
+        }
+        if (payload.valid()) {
+            auto r = index_.get_posting_reader(payload);
+            std::vector<uint32_t> list;
+            list.reserve(payload.doc_freq);
+            while (r.valid()) {
+                list.push_back(r.doc_id());
+                r.next();
+            }
+            if (!list.empty()) {
+                neg_doc_lists.push_back(std::move(list));
+            }
+        }
+    }
+
+    auto is_excluded = [&](uint32_t doc_id) -> bool {
+        for (const auto& doc_list : neg_doc_lists) {
+            if (std::binary_search(doc_list.begin(), doc_list.end(), doc_id)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // If no negated terms exist, execute standard search
+    if (neg_doc_lists.empty()) {
+        if (has_or) {
+            return search_disjunction(unique_pos, k, use_wand);
+        } else if (unique_pos.size() == 1) {
+            return search_disjunction(unique_pos, k, use_wand);
+        } else {
+            return search_conjunction(unique_pos, k);
+        }
+    }
+
+    // When negated terms exist, over-fetch candidate hits until k unexcluded hits are found
+    size_t fetch_k = std::max(k * 2, k + 16);
+    std::vector<SearchHit> final_hits;
+
+    while (true) {
+        QueryResult cand_res;
+        if (has_or) {
+            cand_res = search_disjunction(unique_pos, fetch_k, use_wand);
+        } else if (unique_pos.size() == 1) {
+            cand_res = search_disjunction(unique_pos, fetch_k, use_wand);
+        } else {
+            cand_res = search_conjunction(unique_pos, fetch_k);
+        }
+
+        final_hits.clear();
+        for (const auto& hit : cand_res.hits) {
+            if (!is_excluded(hit.doc_id)) {
+                final_hits.push_back(hit);
+                if (final_hits.size() == k) break;
+            }
+        }
+
+        if (final_hits.size() >= k || cand_res.hits.size() < fetch_k || fetch_k >= index_.total_docs()) {
+            cand_res.hits = std::move(final_hits);
+            cand_res.total_estimate = cand_res.hits.size();
+            return cand_res;
+        }
+
+        fetch_k = std::min(index_.total_docs(), fetch_k * 2);
+    }
 }
 
 }  // namespace needlefish
+

@@ -27,9 +27,7 @@ struct DocumentInput {
  */
 class IndexBuilder {
   public:
-    static constexpr size_t DEFAULT_MEMORY_BUDGET = 1024 * 1024 * 1024;  // 1 GB
-
-    explicit IndexBuilder(size_t memory_budget_bytes = DEFAULT_MEMORY_BUDGET);
+    IndexBuilder() = default;
 
     /**
      * @brief Add a document to the index builder.
@@ -50,14 +48,10 @@ class IndexBuilder {
 
     [[nodiscard]] size_t total_docs() const noexcept { return doc_metadata_.size(); }
     [[nodiscard]] size_t total_terms() const noexcept { return term_postings_.size(); }
-    [[nodiscard]] size_t memory_budget() const noexcept { return memory_budget_; }
-    [[nodiscard]] size_t estimated_memory_usage() const noexcept { return estimated_memory_usage_; }
 
   private:
     void accumulate_document(uint32_t doc_id, std::string_view title, std::string_view text);
 
-    size_t memory_budget_{DEFAULT_MEMORY_BUDGET};
-    size_t estimated_memory_usage_{0};
     bool enable_fm_index_{false};
 
     Analyzer analyzer_{true, true};

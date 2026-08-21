@@ -295,6 +295,13 @@ FMIndex FMIndex::deserialize(std::istream& is) {
         throw std::runtime_error("Failed to read FMIndex header");
     }
 
+    if (sr == 0) {
+        throw std::runtime_error("Corrupted FMIndex: sample_rate is 0");
+    }
+    if (bs > 0 && pi >= bs) {
+        throw std::runtime_error("Corrupted FMIndex: invalid primary_index");
+    }
+
     fmi.text_size_ = static_cast<size_t>(ts);
     fmi.bwt_size_ = static_cast<size_t>(bs);
     fmi.sample_rate_ = static_cast<size_t>(sr);

@@ -16,7 +16,7 @@ std::vector<SearchHit> BlockMaxWAND::top_k_disjunction(std::vector<ScoredTermRea
     auto cmp = [](const SearchHit& a, const SearchHit& b) {
         if (a.score != b.score)
             return a.score > b.score;
-        return a.doc_id > b.doc_id;
+        return a.doc_id < b.doc_id;
     };
     std::priority_queue<SearchHit, std::vector<SearchHit>, decltype(cmp)> heap(cmp);
 

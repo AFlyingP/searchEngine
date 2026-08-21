@@ -157,15 +157,23 @@ TEST_F(EdgeCasesTest, ExtremelyLongQuery) {
     needlefish::IndexView index;
     ASSERT_NO_THROW(index.open(tmp_idx));
 
-    std::string long_query;
+    std::string long_query_or;
     for (int i = 0; i < 500; ++i) {
-        long_query += "term" + std::to_string(i) + " ";
+        long_query_or += "term" + std::to_string(i) + " OR ";
     }
-    long_query += "architecture";
+    long_query_or += "architecture";
 
     needlefish::QueryEvaluator eval(index);
-    auto results = eval.search(long_query, 10);
-    EXPECT_FALSE(results.hits.empty());
+    auto results_or = eval.search(long_query_or, 10);
+    EXPECT_FALSE(results_or.hits.empty());
+
+    std::string long_query_and;
+    for (int i = 0; i < 500; ++i) {
+        long_query_and += "term" + std::to_string(i) + " ";
+    }
+    long_query_and += "architecture";
+    auto results_and = eval.search(long_query_and, 10);
+    EXPECT_TRUE(results_and.hits.empty());
 }
 
 // 7. Bug 1 Regression: Corrupt RadixTrie node edge offset beyond string pool
