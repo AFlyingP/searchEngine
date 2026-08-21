@@ -14,6 +14,7 @@
 #include <mutex>
 #include <sstream>
 #include <thread>
+#include <zlib.h>
 
 #include "rank/snippet.hpp"
 
@@ -137,8 +138,6 @@ std::string get_mime_type(std::string_view path) {
         return "image/x-icon";
     return "application/octet-stream";
 }
-
-#include <zlib.h>
 
 // Token bucket rate limiter with LRU eviction per client IP (IPv4 and IPv6)
 struct RateLimiter {
@@ -390,10 +389,15 @@ HttpResponse HttpServer::handle_api_search(const HttpRequest& req) const {
     size_t fuzzy_dist = 0;
     auto fuzzy_it = req.query_params.find("fuzzy");
     if (fuzzy_it != req.query_params.end()) {
-        try {
-            fuzzy_dist = std::min<size_t>(2, std::stoul(fuzzy_it->second));
-        } catch (...) {
-            fuzzy_dist = 0;
+        std::string val = fuzzy_it->second;
+        if (val == "true" || val == "1" || val == "yes") {
+            fuzzy_dist = 2;
+        } else {
+            try {
+                fuzzy_dist = std::clamp<size_t>(std::stoul(val), 0, 2);
+            } catch (...) {
+                fuzzy_dist = 0;
+            }
         }
     }
 
@@ -486,19 +490,42 @@ HttpResponse HttpServer::handle_api_suggest(const HttpRequest& req) const {
                             .body = "{\"error\": \"Query length exceeds maximum limit of 256 characters\"}"};
     }
 
+    size_t suggest_k = 10;
+    auto k_it = req.query_params.find("k");
+    if (k_it == req.query_params.end()) {
+        k_it = req.query_params.find("limit");
+    }
+    if (k_it != req.query_params.end()) {
+        try {
+            suggest_k = std::clamp<size_t>(std::stoul(k_it->second), 1, 100);
+        } catch (...) {
+            suggest_k = 10;
+        }
+    }
+
+    size_t max_dist = 2;
+    auto dist_it = req.query_params.find("max_dist");
+    if (dist_it != req.query_params.end()) {
+        try {
+            max_dist = std::clamp<size_t>(std::stoul(dist_it->second), 1, 2);
+        } catch (...) {
+            max_dist = 2;
+        }
+    }
+
     bool fuzzy = false;
     auto fuzzy_it = req.query_params.find("fuzzy");
     if (fuzzy_it != req.query_params.end() &&
-        (fuzzy_it->second == "true" || fuzzy_it->second == "1")) {
+        (fuzzy_it->second == "true" || fuzzy_it->second == "1" || fuzzy_it->second == "yes")) {
         fuzzy = true;
     }
 
     const auto t0 = std::chrono::high_resolution_clock::now();
     std::vector<Suggestion> suggestions;
     if (fuzzy) {
-        suggestions = engine_.autocomplete().fuzzy_suggest(prefix, 2, 8);
+        suggestions = engine_.autocomplete().fuzzy_suggest(prefix, max_dist, suggest_k);
     } else {
-        suggestions = engine_.autocomplete().prefix_suggest(prefix, 8);
+        suggestions = engine_.autocomplete().prefix_suggest(prefix, suggest_k);
     }
     const auto t1 = std::chrono::high_resolution_clock::now();
     const uint64_t took_us = static_cast<uint64_t>(
@@ -747,7 +774,12 @@ void HttpServer::worker_loop() {
 
                     std::string raw_resp = resp.to_http_string();
                     size_t total_sent = 0;
+                    auto start_send_time = std::chrono::steady_clock::now();
                     while (total_sent < raw_resp.size()) {
+                        auto now = std::chrono::steady_clock::now();
+                        if (std::chrono::duration<double>(now - start_send_time).count() > 15.0) {
+                            break;
+                        }
                         sock_ssize_t sent = send(client_fd, raw_resp.data() + total_sent,
                                                  static_cast<send_len_t>(raw_resp.size() - total_sent), 0);
                         if (sent <= 0) break;

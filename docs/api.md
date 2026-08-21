@@ -15,17 +15,26 @@ The HTTP server runs on port 8080 by default (`needlefish serve --index corpus.i
 ### `GET /api/search`
 Execute BM25, phrase, regex, or fuzzy queries.
 - **Parameters**:
-  - `q` (string): Query string (e.g. `information retrieval`, `"exact phrase"`, `quantum -physics`, `/pattern/`).
-  - `k` (integer, optional): Maximum hits to return (default: 10).
-  - `fuzzy` (boolean, optional): Set `true` to enable automatic fuzzy fallback.
+  - `q` (string, required): Query string (e.g. `information retrieval`, `"exact phrase"`, `quantum -physics`, `/pattern/`).
+  - `k` / `limit` (integer, optional): Maximum hits to return (default: 10, max: 1000).
+  - `fuzzy` (boolean or integer, optional): Enable fuzzy search (`true`, `1`, `2`).
+  - `mode` (string, optional): Query mode (`standard`, `fuzzy`, `regex`, `substring`).
 - **Response**:
 ```json
 {
+  "query": "information retrieval",
+  "mode": "standard",
   "took_us": 142,
+  "took_ms": 0.142,
   "total_estimate": 5,
+  "total_hits": 5,
+  "corrected": "",
+  "did_you_mean": "",
   "hits": [
     {
+      "rank": 1,
       "id": 42,
+      "doc_id": 42,
       "score": 8.4123,
       "title": "Quantum Computing",
       "snippet": "Introduction to <em>quantum</em> <em>computing</em> algorithms..."
@@ -37,13 +46,14 @@ Execute BM25, phrase, regex, or fuzzy queries.
 ### `GET /api/suggest`
 Retrieve prefix or fuzzy autocomplete term suggestions.
 - **Parameters**:
-  - `prefix` (string): Prefix string (e.g. `algo`).
-  - `k` (integer, optional): Maximum suggestions (default: 10).
-  - `fuzzy` (boolean, optional): Set `true` for fuzzy matching.
+  - `q` / `prefix` (string, required): Prefix string (e.g. `algo`).
+  - `k` / `limit` (integer, optional): Maximum suggestions (default: 10).
+  - `fuzzy` (boolean, optional): Enable fuzzy suggestions (`true`, `1`).
   - `max_dist` (integer, optional): Maximum edit distance (1 or 2, default: 2).
 - **Response**:
 ```json
 {
+  "query": "algo",
   "took_us": 28,
   "suggestions": [
     {

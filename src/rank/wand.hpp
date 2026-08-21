@@ -13,17 +13,6 @@ namespace needlefish {
 struct SearchHit {
     uint32_t doc_id{0};
     float score{0.0f};
-
-    bool operator>(const SearchHit& other) const noexcept {
-        if (score != other.score)
-            return score > other.score;
-        return doc_id < other.doc_id;
-    }
-    bool operator<(const SearchHit& other) const noexcept {
-        if (score != other.score)
-            return score < other.score;
-        return doc_id > other.doc_id;
-    }
 };
 
 struct ScoredTermReader {

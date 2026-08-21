@@ -391,49 +391,60 @@ RadixTrie RadixTrie::deserialize(std::istream& is) {
         }
     }
 
-    // Iterative cycle detection with bounded steps across both child and sibling chains
-    std::vector<uint8_t> color(trie.nodes_.size(), 0);  // 0 = white, 1 = gray, 2 = black
+    // 1. Strict tree shape validation: exactly 1 incoming edge for every node > 0, 0 for root
+    if (trie.nodes_[0].next_sibling != 0) {
+        throw std::runtime_error("Corrupted RadixTrie: root node cannot have a next_sibling");
+    }
+    std::vector<uint32_t> in_degree(trie.nodes_.size(), 0);
+    for (size_t i = 0; i < trie.nodes_.size(); ++i) {
+        uint32_t fc = trie.nodes_[i].first_child;
+        if (fc != 0) {
+            in_degree[fc]++;
+        }
+        uint32_t ns = trie.nodes_[i].next_sibling;
+        if (ns != 0) {
+            in_degree[ns]++;
+        }
+    }
+    if (in_degree[0] != 0) {
+        throw std::runtime_error("Corrupted RadixTrie: root node has incoming edges");
+    }
+    for (size_t i = 1; i < trie.nodes_.size(); ++i) {
+        if (in_degree[i] != 1) {
+            throw std::runtime_error("Corrupted RadixTrie: invalid tree structure (node " +
+                                     std::to_string(i) + " has in-degree " +
+                                     std::to_string(in_degree[i]) + ")");
+        }
+    }
+
+    // 2. Reachability & acyclicity: single DFS from root must visit every node exactly once
+    std::vector<bool> visited(trie.nodes_.size(), false);
     std::vector<uint32_t> stack;
     stack.reserve(64);
     stack.push_back(0);
-    color[0] = 1;
-
-    size_t total_steps = 0;
-    const size_t max_total_steps = trie.nodes_.size() * 3 + 100;
+    visited[0] = true;
+    size_t visited_count = 1;
 
     while (!stack.empty()) {
-        if (++total_steps > max_total_steps) {
-            throw std::runtime_error("Corrupted RadixTrie: cycle detected (step limit exceeded)");
-        }
-
         uint32_t u = stack.back();
-        uint32_t child = trie.nodes_[u].first_child;
-        bool pushed = false;
+        stack.pop_back();
 
+        uint32_t child = trie.nodes_[u].first_child;
         uint32_t sib = child;
-        size_t sib_steps = 0;
         while (sib != 0) {
-            if (++sib_steps > trie.nodes_.size()) {
-                throw std::runtime_error("Corrupted RadixTrie: sibling cycle detected in node " +
-                                         std::to_string(sib));
-            }
-            if (color[sib] == 1) {
+            if (visited[sib]) {
                 throw std::runtime_error("Corrupted RadixTrie: cycle detected involving node " +
                                          std::to_string(sib));
             }
-            if (color[sib] == 0) {
-                color[sib] = 1;
-                stack.push_back(sib);
-                pushed = true;
-                break;
-            }
+            visited[sib] = true;
+            visited_count++;
+            stack.push_back(sib);
             sib = trie.nodes_[sib].next_sibling;
         }
+    }
 
-        if (!pushed) {
-            color[u] = 2;
-            stack.pop_back();
-        }
+    if (visited_count != trie.nodes_.size()) {
+        throw std::runtime_error("Corrupted RadixTrie: unreachable nodes detected in trie");
     }
 
     return trie;

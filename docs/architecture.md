@@ -65,7 +65,7 @@ Needlefish is an embedded, zero-external-dependency, succinct search and substri
 ### 2.4 Server Concurrency & Memory Safety
 - **Worker Thread Pool**: Multi-threaded socket handling with an 8-worker thread pool and bounded task queue (128 connections max, responding 503 on saturation).
 - **Socket Ownership & Framing**: Workers own client sockets end-to-end and enforce a 15-second wall-clock framing deadline (408 on timeout).
-- **Thread Safety**: Workers safely share a single `const IndexView` with `Regex` DFA state caches protected by a mutex.
+- **Thread Safety**: Workers safely share a single `const IndexView`. `Regex` DFA state tables are compiled eagerly ahead-of-time in constructor and are strictly immutable and read-only during query evaluation.
 
 ---
 

@@ -374,6 +374,31 @@ TEST(RegressionTest, SiblingCycleDetectionHangProbe) {
     EXPECT_THROW(RadixTrie::deserialize(ss), std::runtime_error);
 }
 
+TEST(RegressionTest, RadixTrieRejectsMultiParentDAG) {
+    // Crafted 3-node trie where node 0 points child to 1, and node 1 points both first_child and next_sibling to 2 (DAG shape!)
+    std::stringstream ss;
+    uint64_t num_n = 3;
+    uint64_t pool_sz = 16;
+    uint64_t num_t = 0;
+    ss.write(reinterpret_cast<const char*>(&num_n), sizeof(num_n));
+    ss.write(reinterpret_cast<const char*>(&pool_sz), sizeof(pool_sz));
+    ss.write(reinterpret_cast<const char*>(&num_t), sizeof(num_t));
+
+    RadixNode nodes[3]{};
+    nodes[0].first_child = 1;
+    nodes[0].next_sibling = 0;
+    nodes[1].first_child = 2;
+    nodes[1].next_sibling = 2; // multi-parent / DAG reference!
+    nodes[2].first_child = 0;
+    nodes[2].next_sibling = 0;
+
+    ss.write(reinterpret_cast<const char*>(nodes), sizeof(nodes));
+    std::string pool(16, 'a');
+    ss.write(pool.data(), static_cast<std::streamsize>(pool.size()));
+
+    EXPECT_THROW(RadixTrie::deserialize(ss), std::runtime_error);
+}
+
 TEST(RegressionTest, DeserializerOversizedAllocationGuards) {
     // Huge node count
     {
@@ -427,7 +452,7 @@ TEST(RegressionTest, BM25K1BMismatchThrowOnConstruction) {
         IndexView view(tmp_idx);
         // Default index stats has k1=0.9, b=0.4
         // Passing mismatched BM25 parameters must throw invalid_argument
-        Bm25Scorer mismatched_scorer(1.5f, 0.75f, view.avg_doc_len());
+        BM25Scorer mismatched_scorer(1.5, 0.75);
         EXPECT_THROW(QueryEvaluator eval(view, mismatched_scorer), std::invalid_argument);
     }
 

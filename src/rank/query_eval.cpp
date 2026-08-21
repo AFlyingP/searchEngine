@@ -313,14 +313,18 @@ QueryResult QueryEvaluator::search(std::string_view query_str, size_t k, bool us
         return QueryResult{};
     }
 
-    // Check for quoted phrase queries (including phrase queries with negated terms like '"a b" -c')
     std::string q_str(query_str);
+    std::vector<std::string> positive_terms;
+    std::vector<std::string> negated_terms;
+    std::vector<std::string> phrase_terms;
+    bool has_or = false;
+
+    // Check for quoted phrase queries (e.g. '"a b" -c' or '"information retrieval"')
     size_t q_start = q_str.find('"');
     size_t q_end = (q_start != std::string::npos) ? q_str.find('"', q_start + 1) : std::string::npos;
     if (q_start != std::string::npos && q_end != std::string::npos) {
         std::string phrase_inner = q_str.substr(q_start + 1, q_end - q_start - 1);
         auto p_toks = analyzer_.analyze(phrase_inner);
-        std::vector<std::string> phrase_terms;
         for (const auto& tok : p_toks) {
             phrase_terms.push_back(tok.term);
         }
@@ -328,88 +332,50 @@ QueryResult QueryEvaluator::search(std::string_view query_str, size_t k, bool us
         std::string remaining = q_str.substr(0, q_start) + " " + q_str.substr(q_end + 1);
         std::istringstream iss(remaining);
         std::string token;
-        std::vector<std::string> negated_terms;
         while (iss >> token) {
+            if (token == "OR" || token == "or") {
+                has_or = true;
+                continue;
+            }
             if (token.size() > 1 && token.front() == '-') {
                 auto neg_toks = analyzer_.analyze(token.substr(1));
                 for (const auto& t : neg_toks) {
                     negated_terms.push_back(t.term);
                 }
-            }
-        }
-
-        if (!phrase_terms.empty()) {
-            if (negated_terms.empty()) {
-                return search_phrase(phrase_terms, k);
-            }
-            auto res = search_phrase(phrase_terms, k + negated_terms.size() * 5);
-            QueryResult filtered;
-            filtered.total_estimate = res.total_estimate;
-
-            std::vector<std::vector<uint32_t>> neg_doc_lists;
-            for (const auto& neg : negated_terms) {
-                auto neg_payload = index_.term_payload(neg);
-                if (neg_payload.valid() && neg_payload.doc_freq > 0) {
-                    PostingListReader r(index_.postings_section_data() + neg_payload.postings_offset,
-                                        neg_payload.postings_len);
-                    std::vector<uint32_t> neg_docs;
-                    neg_docs.reserve(neg_payload.doc_freq);
-                    while (r.has_next()) {
-                        neg_docs.push_back(r.doc_id());
-                        r.next();
-                    }
-                    neg_doc_lists.push_back(std::move(neg_docs));
+            } else {
+                auto pos_toks = analyzer_.analyze(token);
+                for (const auto& t : pos_toks) {
+                    positive_terms.push_back(t.term);
                 }
             }
-
-            for (const auto& hit : res.hits) {
-                bool excluded = false;
-                for (const auto& ndocs : neg_doc_lists) {
-                    if (std::binary_search(ndocs.begin(), ndocs.end(), hit.doc_id)) {
-                        excluded = true;
-                        break;
-                    }
-                }
-                if (!excluded) {
-                    filtered.hits.push_back(hit);
-                    if (filtered.hits.size() >= k) break;
-                }
-            }
-            return filtered;
         }
-    }
-
-    // Split words to detect negated terms ("-term") and "OR" operator
-    std::vector<std::string> positive_terms;
-    std::vector<std::string> negated_terms;
-    bool has_or = false;
-
-    std::string q_str(query_str);
-    std::istringstream iss(q_str);
-    std::string token;
-    while (iss >> token) {
-        if (token == "OR" || token == "or") {
-            has_or = true;
-            continue;
-        }
-        if (token.size() > 1 && token.front() == '-') {
-            auto neg_toks = analyzer_.analyze(token.substr(1));
-            for (const auto& t : neg_toks) {
-                negated_terms.push_back(t.term);
+    } else {
+        std::istringstream iss(q_str);
+        std::string token;
+        while (iss >> token) {
+            if (token == "OR" || token == "or") {
+                has_or = true;
+                continue;
             }
-        } else {
-            auto pos_toks = analyzer_.analyze(token);
-            for (const auto& t : pos_toks) {
-                positive_terms.push_back(t.term);
+            if (token.size() > 1 && token.front() == '-') {
+                auto neg_toks = analyzer_.analyze(token.substr(1));
+                for (const auto& t : neg_toks) {
+                    negated_terms.push_back(t.term);
+                }
+            } else {
+                auto pos_toks = analyzer_.analyze(token);
+                for (const auto& t : pos_toks) {
+                    positive_terms.push_back(t.term);
+                }
             }
         }
     }
 
-    if (positive_terms.empty()) {
+    if (positive_terms.empty() && phrase_terms.empty()) {
         return QueryResult{};
     }
 
-    // Deduplicate positive and negated terms
+    // Deduplicate positive, phrase, and negated terms
     std::vector<std::string> unique_pos;
     {
         std::unordered_set<std::string> seen;
@@ -460,7 +426,41 @@ QueryResult QueryEvaluator::search(std::string_view query_str, size_t k, bool us
         return false;
     };
 
-    // If no negated terms exist, execute standard search
+    // Case 1: Pure phrase query without other positive terms
+    if (!phrase_terms.empty() && unique_pos.empty()) {
+        if (neg_doc_lists.empty()) {
+            return search_phrase(phrase_terms, k);
+        }
+        // Overfetch phrase hits until k unexcluded hits are found
+        size_t fetch_k = std::max(k * 2, k + 16);
+        std::vector<SearchHit> final_hits;
+        size_t total_est = 0;
+
+        while (true) {
+            auto cand_res = search_phrase(phrase_terms, fetch_k);
+            total_est = cand_res.total_estimate;
+            final_hits.clear();
+            for (const auto& hit : cand_res.hits) {
+                if (!is_excluded(hit.doc_id)) {
+                    final_hits.push_back(hit);
+                    if (final_hits.size() >= k) break;
+                }
+            }
+
+            if (final_hits.size() >= k || cand_res.hits.size() < fetch_k ||
+                fetch_k >= index_.total_docs()) {
+                break;
+            }
+            fetch_k = std::min(index_.total_docs(), fetch_k * 2 + 32);
+        }
+
+        return QueryResult{
+            .hits = std::move(final_hits),
+            .total_estimate = total_est,
+        };
+    }
+
+    // Case 2: General terms (or mixed terms)
     if (neg_doc_lists.empty()) {
         if (has_or) {
             return search_disjunction(unique_pos, k, use_wand);
@@ -474,6 +474,7 @@ QueryResult QueryEvaluator::search(std::string_view query_str, size_t k, bool us
     // When negated terms exist, over-fetch candidate hits until k unexcluded hits are found
     size_t fetch_k = std::max(k * 2, k + 16);
     std::vector<SearchHit> final_hits;
+    size_t total_est = 0;
 
     while (true) {
         QueryResult cand_res;
@@ -485,22 +486,29 @@ QueryResult QueryEvaluator::search(std::string_view query_str, size_t k, bool us
             cand_res = search_conjunction(unique_pos, fetch_k);
         }
 
+        total_est = cand_res.total_estimate;
         final_hits.clear();
         for (const auto& hit : cand_res.hits) {
             if (!is_excluded(hit.doc_id)) {
                 final_hits.push_back(hit);
-                if (final_hits.size() == k) break;
+                if (final_hits.size() >= k) {
+                    break;
+                }
             }
         }
 
-        if (final_hits.size() >= k || cand_res.hits.size() < fetch_k || fetch_k >= index_.total_docs()) {
-            cand_res.hits = std::move(final_hits);
-            cand_res.total_estimate = cand_res.hits.size();
-            return cand_res;
+        if (final_hits.size() >= k || cand_res.hits.size() < fetch_k ||
+            fetch_k >= index_.total_docs()) {
+            break;
         }
 
-        fetch_k = std::min(index_.total_docs(), fetch_k * 2);
+        fetch_k = std::min(index_.total_docs(), fetch_k * 2 + 32);
     }
+
+    return QueryResult{
+        .hits = std::move(final_hits),
+        .total_estimate = total_est,
+    };
 }
 
 }  // namespace needlefish

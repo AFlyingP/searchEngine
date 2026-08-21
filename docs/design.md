@@ -138,7 +138,7 @@ All sections are strictly 64-byte aligned for zero-copy direct mapping:
 ### 3.1 Regular Expression Engine (`needlefish::Regex`)
 - **AST Parser**: Recursive-descent parser for literals, wildcards `.`, character classes `[a-z]`, `[^0-9]`, escapes `\d`, `\w`, `\s`, repetitions `*`, `+`, `?`, and quantifiers `{n,m}`.
 - **Thompson NFA Construction**: Converts AST into non-deterministic state graph with $\epsilon$-transitions with state explosion limits ($\le 2048$ states).
-- **Iterative BFS DFA Construction**: Generates deterministic state transition table iteratively via BFS worklist without recursive stack growth. Thread-safe execution under shared mutex.
+- **Iterative BFS DFA Construction**: Generates deterministic state transition table iteratively via BFS worklist without recursive stack growth. DFA state tables are immutable after construction, providing lock-free thread safety during matching.
 - **Guaranteed $O(n)$ Runtime**: Deterministic state transitions ensure linear-time scanning with zero catastrophic backtracking.
 
 ### 3.2 Levenshtein DP-Row Automaton (`needlefish::LevenshteinAutomaton`)

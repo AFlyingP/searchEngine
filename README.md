@@ -227,7 +227,7 @@ Returns service health and index integrity digest:
 
 ```bash
 docker build -t needlefish .
-docker run -p 8080:8080 -v $(pwd)/data:/data needlefish --index /data/corpus.idx
+docker run -p 8080:8080 -v $(pwd)/data:/data needlefish --index /data/corpus.idx --host 0.0.0.0 --port 8080 --web-dir /app/web
 ```
 
 ---
